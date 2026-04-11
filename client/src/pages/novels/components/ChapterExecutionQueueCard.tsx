@@ -3,8 +3,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  chapterStatusDescription,
   chapterStatusLabel,
   chapterSuggestedActionLabel,
+  generationStateDescription,
   generationStateLabel,
   parseRiskFlags,
   shouldShowGenerationStateBadge,
@@ -18,6 +20,7 @@ interface ChapterExecutionQueueCardProps {
   queueFilter: QueueFilterKey;
   queueFilters: QueueFilterOption[];
   streamingChapterId?: string | null;
+  streamingPhase?: "streaming" | "finalizing" | "completed" | null;
   repairStreamingChapterId?: string | null;
   onQueueFilterChange: (filter: QueueFilterKey) => void;
   onSelectChapter: (chapterId: string) => void;
@@ -30,6 +33,7 @@ export default function ChapterExecutionQueueCard(props: ChapterExecutionQueueCa
     queueFilter,
     queueFilters,
     streamingChapterId,
+    streamingPhase,
     repairStreamingChapterId,
     onQueueFilterChange,
     onSelectChapter,
@@ -100,6 +104,8 @@ export default function ChapterExecutionQueueCard(props: ChapterExecutionQueueCa
                     <Badge
                       variant={isSelected ? "default" : "outline"}
                       className="min-w-[60px] shrink-0 justify-center rounded-full px-2 py-1 text-[11px]"
+                      title={chapterStatusDescription(chapter.chapterStatus)}
+                      aria-label={chapterStatusDescription(chapter.chapterStatus)}
                     >
                       {chapterStatusLabel(chapter.chapterStatus)}
                     </Badge>
@@ -107,7 +113,9 @@ export default function ChapterExecutionQueueCard(props: ChapterExecutionQueueCa
 
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {isStreamingTarget ? (
-                      <Badge className="rounded-full px-2 py-1 text-[11px]">写作中</Badge>
+                      <Badge className="rounded-full px-2 py-1 text-[11px]">
+                        {streamingPhase === "finalizing" ? "收尾中" : "写作中"}
+                      </Badge>
                     ) : null}
                     {isRepairTarget ? (
                       <Badge variant="secondary" className="rounded-full px-2 py-1 text-[11px]">
@@ -115,7 +123,12 @@ export default function ChapterExecutionQueueCard(props: ChapterExecutionQueueCa
                       </Badge>
                     ) : null}
                     {shouldShowGenerationStateBadge(chapter.generationState) ? (
-                      <Badge variant="outline" className="rounded-full px-2 py-1 text-[11px]">
+                      <Badge
+                        variant="outline"
+                        className="rounded-full px-2 py-1 text-[11px]"
+                        title={generationStateDescription(chapter.generationState)}
+                        aria-label={generationStateDescription(chapter.generationState)}
+                      >
                         {generationStateLabel(chapter.generationState)}
                       </Badge>
                     ) : null}

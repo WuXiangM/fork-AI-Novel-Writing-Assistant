@@ -56,6 +56,16 @@ import type { ChapterReviewResult } from "./chapterPlanning.shared";
 import type { NovelEditTakeoverState, NovelTaskDrawerState } from "./components/NovelEditView.types";
 import NovelExistingProjectTakeoverDialog from "./components/NovelExistingProjectTakeoverDialog";
 import { syncNovelWorkflowStageSilently, workflowStageFromTab } from "./novelWorkflow.client";
+import { scopeFromWorkspaceTab, tabFromDirectorProgress, tabFromScope } from "./novelWorkspaceNavigation";
+import { getCandidateSelectionLink } from "@/lib/novelWorkflowTaskUi";
+import {
+  buildContinueAutoExecutionActionLabel,
+  buildContinueAutoExecutionToast,
+  buildTakeoverDescription,
+  buildTakeoverTitle,
+  formatTakeoverCheckpoint,
+  resolveAutoExecutionScopeLabel,
+} from "./novelEditTakeover.shared";
 import {
   DEFAULT_ESTIMATED_CHAPTER_COUNT,
   createDefaultNovelBasicFormState,
@@ -73,196 +83,7 @@ import {
 } from "./volumePlan.utils";
 
 function scopeFromTab(tab: string): DirectorLockScope | null {
-  if (tab === "basic") return "basic";
-  if (tab === "story_macro") return "story_macro";
-  if (tab === "character") return "character";
-  if (tab === "outline") return "outline";
-  if (tab === "structured") return "structured";
-  if (tab === "chapter") return "chapter";
-  if (tab === "pipeline") return "pipeline";
-  return null;
-}
-
-function tabFromScope(scope: DirectorLockScope | null | undefined): "basic" | "story_macro" | "character" | "outline" | "structured" | "chapter" | "pipeline" | null {
-  if (!scope) {
-    return null;
-  }
-  return scope;
-}
-
-function tabFromWorkflowStageName(stage: string | null | undefined): "basic" | "story_macro" | "character" | "outline" | "structured" | "chapter" | "pipeline" | null {
-  switch (stage) {
-    case "project_setup":
-      return "basic";
-    case "story_macro":
-      return "story_macro";
-    case "character_setup":
-      return "character";
-    case "volume_strategy":
-      return "outline";
-    case "structured_outline":
-      return "structured";
-    case "chapter_execution":
-      return "chapter";
-    case "quality_repair":
-      return "pipeline";
-    default:
-      return null;
-  }
-}
-
-function tabFromDirectorProgress(input: {
-  currentStage?: string | null;
-  currentItemKey?: string | null;
-  checkpointType?: string | null;
-  reviewScope?: DirectorLockScope | null;
-}): "basic" | "story_macro" | "character" | "outline" | "structured" | "chapter" | "pipeline" | null {
-  const reviewTab = tabFromScope(input.reviewScope);
-  if (reviewTab) {
-    return reviewTab;
-  }
-  switch (input.checkpointType) {
-    case "book_contract_ready":
-      return "story_macro";
-    case "character_setup_required":
-      return "character";
-    case "volume_strategy_ready":
-      return "outline";
-    case "front10_ready":
-      return "structured";
-    case "chapter_batch_ready":
-    case "workflow_completed":
-      return "pipeline";
-    default:
-      break;
-  }
-
-  switch (input.currentItemKey) {
-    case "novel_create":
-    case "project_setup":
-      return "basic";
-    case "book_contract":
-    case "story_macro":
-    case "constraint_engine":
-      return "story_macro";
-    case "character_setup":
-    case "character_cast_apply":
-      return "character";
-    case "volume_strategy":
-    case "volume_skeleton":
-      return "outline";
-    case "beat_sheet":
-    case "chapter_list":
-    case "chapter_sync":
-    case "chapter_detail_bundle":
-      return "structured";
-    case "chapter_execution":
-      return "chapter";
-    case "reviewing":
-    case "repairing":
-    case "quality_repair":
-      return "pipeline";
-    default:
-      break;
-  }
-
-  return tabFromWorkflowStageName(input.currentStage);
-}
-
-function formatTakeoverCheckpoint(checkpoint: string | null | undefined): string {
-  if (checkpoint === "candidate_selection_required") {
-    return "等待确认书级方向";
-  }
-  if (checkpoint === "book_contract_ready") {
-    return "Book Contract 已就绪";
-  }
-  if (checkpoint === "character_setup_required") {
-    return "角色准备待审核";
-  }
-  if (checkpoint === "volume_strategy_ready") {
-    return "卷战略 / 卷骨架待审核";
-  }
-  if (checkpoint === "front10_ready") {
-    return "前 10 章可开写";
-  }
-  if (checkpoint === "chapter_batch_ready") {
-    return "前 10 章自动执行已暂停";
-  }
-  if (checkpoint === "workflow_completed") {
-    return "主流程完成";
-  }
-  return "导演流程进行中";
-}
-
-function buildTakeoverTitle(input: {
-  mode: NovelEditTakeoverState["mode"];
-  novelTitle: string;
-  checkpointType: string | null | undefined;
-}): string {
-  if (
-    input.mode === "running"
-    && (input.checkpointType === "front10_ready" || input.checkpointType === "chapter_batch_ready")
-  ) {
-    return `《${input.novelTitle}》正在自动执行前 10 章`;
-  }
-  if (input.mode === "waiting") {
-    if (input.checkpointType === "character_setup_required") {
-      return `《${input.novelTitle}》等待审核角色准备`;
-    }
-    if (input.checkpointType === "volume_strategy_ready") {
-      return `《${input.novelTitle}》等待审核卷战略 / 卷骨架`;
-    }
-    if (input.checkpointType === "front10_ready") {
-      return `《${input.novelTitle}》已完成自动导演交接`;
-    }
-  }
-  if (input.mode === "failed") {
-    if (input.checkpointType === "chapter_batch_ready") {
-      return `《${input.novelTitle}》前 10 章自动执行已暂停`;
-    }
-    return `《${input.novelTitle}》自动导演已中断`;
-  }
-  if (input.mode === "loading") {
-    return `《${input.novelTitle}》自动导演状态同步中`;
-  }
-  return `《${input.novelTitle}》正在自动导演`;
-}
-
-function buildTakeoverDescription(input: {
-  mode: NovelEditTakeoverState["mode"];
-  checkpointType: string | null | undefined;
-  reviewScope: DirectorLockScope | null | undefined;
-}): string {
-  if (
-    input.mode === "running"
-    && (input.checkpointType === "front10_ready" || input.checkpointType === "chapter_batch_ready")
-  ) {
-    return "AI 正在后台自动执行前 10 章，并会继续完成审校与修复。你仍可继续手动查看和编辑；如果同时修改当前章节，后续自动结果可能覆盖这部分内容。";
-  }
-  if (input.mode === "waiting") {
-    if (input.checkpointType === "character_setup_required") {
-      return "角色准备已经生成。你可以先检查核心角色、关系和当前目标，确认后再继续自动导演。";
-    }
-    if (input.checkpointType === "volume_strategy_ready") {
-      return "当前可以审核并微调卷战略 / 卷骨架。确认后再继续自动生成第 1 卷节奏板、拆章和前 10 章细化。";
-    }
-    if (input.checkpointType === "front10_ready") {
-      return "自动导演已经完成第 1 卷开写准备。你可以直接进入章节执行，也可以继续让 AI 自动执行前 10 章。";
-    }
-    if (input.reviewScope) {
-      return "自动导演已到达审核点。请先检查当前阶段产物，再决定是否继续推进。";
-    }
-  }
-  if (input.mode === "failed") {
-    if (input.checkpointType === "chapter_batch_ready") {
-      return "前 10 章自动执行已暂停。建议先查看任务中心或质量修复区，再决定是否继续自动执行。";
-    }
-    return "后台导演流程已中断。建议先去任务中心查看失败原因，再决定是否从最近检查点恢复。";
-  }
-  if (input.mode === "loading") {
-    return "正在同步当前自动导演状态。";
-  }
-  return "AI 正在后台接管这本书的开书流程。你可以继续手动操作当前项目；如果与自动导演同时改同一块内容，以最新写入结果为准。";
+  return scopeFromWorkspaceTab(tab);
 }
 
 function resolveDirectorConsistencyIssue(input: {
@@ -612,6 +433,7 @@ export default function NovelEdit() {
     }
     return raw as DirectorSessionState;
   }, [activeAutoDirectorTask]);
+  const activeAutoExecutionScopeLabel = resolveAutoExecutionScopeLabel(activeAutoDirectorTask);
   const workflowCurrentTab = useMemo(
     () => tabFromDirectorProgress({
       currentStage: activeAutoDirectorTask?.currentStage,
@@ -703,10 +525,10 @@ export default function NovelEdit() {
       await queryClient.invalidateQueries({ queryKey: queryKeys.novels.detail(id) });
       await queryClient.invalidateQueries({ queryKey: queryKeys.novels.volumeWorkspace(id) });
       await queryClient.invalidateQueries({ queryKey: ["tasks"] });
-      toast.success("自动导演已继续执行前 10 章，并会在后台自动审校与修复。");
+      toast.success(buildContinueAutoExecutionToast(activeAutoExecutionScopeLabel));
     },
     onError: (error) => {
-      const message = error instanceof Error ? error.message : "继续自动执行前 10 章失败。";
+      const message = error instanceof Error ? error.message : `继续自动执行${activeAutoExecutionScopeLabel}失败。`;
       toast.error(message);
     },
   });
@@ -726,6 +548,12 @@ export default function NovelEdit() {
     }
     setActiveTab(reviewTab);
     setIsTaskDrawerOpen(false);
+  };
+  const openCandidateSelection = () => {
+    if (!activeAutoDirectorTask?.id) {
+      return;
+    }
+    navigate(getCandidateSelectionLink(activeAutoDirectorTask.id));
   };
   const openChapterExecution = () => {
     if (activeAutoDirectorTask?.resumeTarget?.chapterId) {
@@ -839,9 +667,19 @@ export default function NovelEdit() {
         : "waiting";
     const novelTitle = novelDetailQuery.data?.data?.title?.trim() || task.title?.trim() || "当前项目";
     const reviewScope = activeDirectorSession?.reviewScope ?? null;
+    const autoExecutionScopeLabel = resolveAutoExecutionScopeLabel(task);
     const actions: NonNullable<NovelEditTakeoverState["actions"]> = [];
     const reviewTab = tabFromScope(reviewScope);
     if (
+      mode === "waiting"
+      && task.checkpointType === "candidate_selection_required"
+    ) {
+      actions.push({
+        label: "去确认书级方向",
+        onClick: openCandidateSelection,
+        variant: "default",
+      });
+    } else if (
       mode === "waiting"
       && reviewTab
       && reviewTab !== activeTab
@@ -856,7 +694,7 @@ export default function NovelEdit() {
     }
     if (mode === "waiting" && task.checkpointType === "front10_ready") {
       actions.push({
-        label: continueAutoExecutionMutation.isPending ? "继续执行中..." : "继续自动执行前 10 章",
+        label: buildContinueAutoExecutionActionLabel(autoExecutionScopeLabel, continueAutoExecutionMutation.isPending),
         onClick: () => continueAutoExecutionMutation.mutate(),
         variant: "default",
         disabled: continueAutoExecutionMutation.isPending,
@@ -881,7 +719,7 @@ export default function NovelEdit() {
     }
     if (mode === "failed" && task.checkpointType === "chapter_batch_ready") {
       actions.push({
-        label: continueAutoExecutionMutation.isPending ? "继续执行中..." : "继续自动执行前 10 章",
+        label: buildContinueAutoExecutionActionLabel(autoExecutionScopeLabel, continueAutoExecutionMutation.isPending),
         onClick: () => continueAutoExecutionMutation.mutate(),
         variant: "default",
         disabled: continueAutoExecutionMutation.isPending,
@@ -957,6 +795,7 @@ export default function NovelEdit() {
             mode,
             novelTitle,
             checkpointType: task.checkpointType,
+            scopeLabel: autoExecutionScopeLabel,
           }),
       description: consistencyIssue === "missing_characters"
         ? "任务记录显示已完成开书交接，但当前项目里还没有角色资产，所以角色准备和章节执行都不完整。可以直接补齐导演产物，系统会继续修复。"
@@ -966,6 +805,7 @@ export default function NovelEdit() {
             mode,
             checkpointType: task.checkpointType,
             reviewScope,
+            scopeLabel: autoExecutionScopeLabel,
           }),
       progress: task.progress,
       currentAction: consistencyIssue === "missing_characters"
@@ -973,13 +813,13 @@ export default function NovelEdit() {
         : consistencyIssue === "missing_chapters"
           ? "检测到章节执行区为空，当前导演结果需要继续同步章节资源。"
           : mode === "running" && task.checkpointType === "chapter_batch_ready" && task.currentItemLabel?.includes("已暂停")
-            ? "正在继续自动执行前 10 章"
+            ? `正在继续自动执行${autoExecutionScopeLabel}`
             : task.currentItemLabel ?? null,
       checkpointLabel: consistencyIssue
         ? "导演产物待补齐"
         : mode === "running" && task.checkpointType === "chapter_batch_ready"
-          ? "前 10 章自动执行中"
-          : formatTakeoverCheckpoint(task.checkpointType),
+          ? `${autoExecutionScopeLabel}自动执行中`
+          : formatTakeoverCheckpoint(task.checkpointType, task),
       taskId: task.id,
       actions,
     };
@@ -995,6 +835,7 @@ export default function NovelEdit() {
     isDirectorExitActionExpanded,
     navigate,
     novelDetailQuery.data?.data?.title,
+    openCandidateSelection,
     openQualityRepair,
     setActiveTab,
     setSelectedChapterId,
@@ -1024,8 +865,9 @@ export default function NovelEdit() {
         });
       }
     } else if (task.status === "waiting_approval" && task.checkpointType === "front10_ready") {
+      const autoExecutionScopeLabel = resolveAutoExecutionScopeLabel(task);
       actions.push({
-        label: continueAutoExecutionMutation.isPending ? "继续执行中..." : "继续自动执行前 10 章",
+        label: buildContinueAutoExecutionActionLabel(autoExecutionScopeLabel, continueAutoExecutionMutation.isPending),
         onClick: () => continueAutoExecutionMutation.mutate(),
         variant: "default",
         disabled: continueAutoExecutionMutation.isPending,
@@ -1034,6 +876,12 @@ export default function NovelEdit() {
         label: "进入章节执行",
         onClick: openChapterExecution,
         variant: "outline",
+      });
+    } else if (task.status === "waiting_approval" && task.checkpointType === "candidate_selection_required") {
+      actions.push({
+        label: "去确认书级方向",
+        onClick: openCandidateSelection,
+        variant: "default",
       });
     } else if (
       task.status === "waiting_approval"
@@ -1053,8 +901,9 @@ export default function NovelEdit() {
         disabled: continueAutoDirectorMutation.isPending,
       });
     } else if ((task.status === "failed" || task.status === "cancelled") && task.checkpointType === "chapter_batch_ready") {
+      const autoExecutionScopeLabel = resolveAutoExecutionScopeLabel(task);
       actions.push({
-        label: continueAutoExecutionMutation.isPending ? "继续执行中..." : "继续自动执行前 10 章",
+        label: buildContinueAutoExecutionActionLabel(autoExecutionScopeLabel, continueAutoExecutionMutation.isPending),
         onClick: () => continueAutoExecutionMutation.mutate(),
         variant: "default",
         disabled: continueAutoExecutionMutation.isPending,
@@ -1102,6 +951,7 @@ export default function NovelEdit() {
     consistencyIssue,
     continueAutoDirectorMutation,
     continueAutoExecutionMutation,
+    openCandidateSelection,
     openReviewStage,
     openChapterExecution,
     openQualityRepair,
@@ -1269,6 +1119,11 @@ export default function NovelEdit() {
   };
 
   const chapterSSE = useSSE({
+    onRunStatus: (payload) => {
+      if ((payload.phase === "finalizing" || payload.phase === "completed") && payload.message) {
+        setChapterOperationMessage(payload.message);
+      }
+    },
     onDone: async () => {
       await invalidateNovelDetail();
       setActiveChapterStream(null);
@@ -1277,6 +1132,11 @@ export default function NovelEdit() {
   const bibleSSE = useSSE({ onDone: invalidateNovelDetail });
   const beatsSSE = useSSE({ onDone: invalidateNovelDetail });
   const repairSSE = useSSE({
+    onRunStatus: (payload) => {
+      if ((payload.phase === "finalizing" || payload.phase === "completed") && payload.message) {
+        setChapterOperationMessage(payload.message);
+      }
+    },
     onDone: async (fullContent) => {
       setRepairAfterContent(fullContent);
       await invalidateNovelDetail();
@@ -1518,7 +1378,67 @@ export default function NovelEdit() {
     onSaveStructured: () => saveStructuredMutation.mutate(),
     isSavingStructured: saveStructuredMutation.isPending,
   });
-  const chapterTab = { novelId: id, worldInjectionSummary, hasCharacters, chapters, selectedChapterId, selectedChapter, onSelectChapter: setSelectedChapterId, onGoToCharacterTab: goToCharacterTab, onCreateChapter: () => createChapterMutation.mutate(), isCreatingChapter: createChapterMutation.isPending, chapterOperationMessage, strategy: chapterStrategy, onStrategyChange: (field: "runMode" | "wordSize" | "conflictLevel" | "pace" | "aiFreedom", value: string | number) => setChapterStrategy((prev) => ({ ...prev, [field]: value } as ChapterExecutionStrategy)), onApplyStrategy: chapterExecutionActions.applyStrategy, isApplyingStrategy: chapterExecutionActions.isPatchingChapter, onGenerateSelectedChapter: handleGenerateSelectedChapter, onRewriteChapter: chapterExecutionActions.rewriteChapter, onExpandChapter: chapterExecutionActions.expandChapter, onCompressChapter: chapterExecutionActions.compressChapter, onSummarizeChapter: chapterExecutionActions.summarizeChapter, onGenerateTaskSheet: chapterExecutionActions.generateTaskSheet, onGenerateSceneCards: chapterExecutionActions.generateSceneCards, onGenerateChapterPlan: () => generateChapterPlanMutation.mutate(), onReplanChapter: () => replanChapterMutation.mutate(), onRunFullAudit: () => fullAuditMutation.mutate(), onCheckContinuity: chapterExecutionActions.checkContinuity, onCheckCharacterConsistency: chapterExecutionActions.checkCharacterConsistency, onCheckPacing: chapterExecutionActions.checkPacing, onAutoRepair: chapterExecutionActions.autoRepair, onStrengthenConflict: chapterExecutionActions.strengthenConflict, onEnhanceEmotion: chapterExecutionActions.enhanceEmotion, onUnifyStyle: chapterExecutionActions.unifyStyle, onAddDialogue: chapterExecutionActions.addDialogue, onAddDescription: chapterExecutionActions.addDescription, isReviewingChapter: reviewMutation.isPending, isRepairingChapter: repairSSE.isStreaming, reviewResult, replanRecommendation: reviewResult?.replanRecommendation ?? null, lastReplanResult: replanChapterMutation.data?.data ?? null, chapterPlan, latestStateSnapshot, chapterAuditReports, isGeneratingChapterPlan: generateChapterPlanMutation.isPending, isReplanningChapter: replanChapterMutation.isPending, isRunningFullAudit: fullAuditMutation.isPending, chapterQualityReport, repairStreamContent: repairSSE.content, isRepairStreaming: repairSSE.isStreaming, repairStreamingChapterId: activeRepairStream?.chapterId ?? null, repairStreamingChapterLabel: activeRepairStream?.chapterLabel ?? null, onAbortRepair: handleAbortRepair, streamContent: chapterSSE.content, isStreaming: chapterSSE.isStreaming, streamingChapterId: activeChapterStream?.chapterId ?? null, streamingChapterLabel: activeChapterStream?.chapterLabel ?? null, onAbortStream: handleAbortChapterStream };
+  const chapterTab = {
+    novelId: id,
+    worldInjectionSummary,
+    hasCharacters,
+    chapters,
+    selectedChapterId,
+    selectedChapter,
+    onSelectChapter: setSelectedChapterId,
+    onGoToCharacterTab: goToCharacterTab,
+    onCreateChapter: () => createChapterMutation.mutate(),
+    isCreatingChapter: createChapterMutation.isPending,
+    chapterOperationMessage,
+    strategy: chapterStrategy,
+    onStrategyChange: (field: "runMode" | "wordSize" | "conflictLevel" | "pace" | "aiFreedom", value: string | number) =>
+      setChapterStrategy((prev) => ({ ...prev, [field]: value } as ChapterExecutionStrategy)),
+    onApplyStrategy: chapterExecutionActions.applyStrategy,
+    isApplyingStrategy: chapterExecutionActions.isPatchingChapter,
+    onGenerateSelectedChapter: handleGenerateSelectedChapter,
+    onRewriteChapter: chapterExecutionActions.rewriteChapter,
+    onExpandChapter: chapterExecutionActions.expandChapter,
+    onCompressChapter: chapterExecutionActions.compressChapter,
+    onSummarizeChapter: chapterExecutionActions.summarizeChapter,
+    onGenerateTaskSheet: chapterExecutionActions.generateTaskSheet,
+    onGenerateSceneCards: chapterExecutionActions.generateSceneCards,
+    onGenerateChapterPlan: () => generateChapterPlanMutation.mutate(),
+    onReplanChapter: () => replanChapterMutation.mutate(),
+    onRunFullAudit: () => fullAuditMutation.mutate(),
+    onCheckContinuity: chapterExecutionActions.checkContinuity,
+    onCheckCharacterConsistency: chapterExecutionActions.checkCharacterConsistency,
+    onCheckPacing: chapterExecutionActions.checkPacing,
+    onAutoRepair: chapterExecutionActions.autoRepair,
+    onStrengthenConflict: chapterExecutionActions.strengthenConflict,
+    onEnhanceEmotion: chapterExecutionActions.enhanceEmotion,
+    onUnifyStyle: chapterExecutionActions.unifyStyle,
+    onAddDialogue: chapterExecutionActions.addDialogue,
+    onAddDescription: chapterExecutionActions.addDescription,
+    isReviewingChapter: reviewMutation.isPending,
+    isRepairingChapter: repairSSE.isStreaming,
+    reviewResult,
+    replanRecommendation: reviewResult?.replanRecommendation ?? null,
+    lastReplanResult: replanChapterMutation.data?.data ?? null,
+    chapterPlan,
+    latestStateSnapshot,
+    chapterAuditReports,
+    isGeneratingChapterPlan: generateChapterPlanMutation.isPending,
+    isReplanningChapter: replanChapterMutation.isPending,
+    isRunningFullAudit: fullAuditMutation.isPending,
+    chapterQualityReport,
+    repairStreamContent: repairSSE.content,
+    isRepairStreaming: repairSSE.isStreaming,
+    repairStreamingChapterId: activeRepairStream?.chapterId ?? null,
+    repairStreamingChapterLabel: activeRepairStream?.chapterLabel ?? null,
+    repairRunStatus: repairSSE.latestRun,
+    onAbortRepair: handleAbortRepair,
+    streamContent: chapterSSE.content,
+    isStreaming: chapterSSE.isStreaming,
+    streamingChapterId: activeChapterStream?.chapterId ?? null,
+    streamingChapterLabel: activeChapterStream?.chapterLabel ?? null,
+    chapterRunStatus: chapterSSE.latestRun,
+    onAbortStream: handleAbortChapterStream,
+  };
   const pipelineTab = { novelId: id, worldInjectionSummary, hasCharacters, onGoToCharacterTab: goToCharacterTab, pipelineForm, onPipelineFormChange: (field: "startOrder" | "endOrder" | "maxRetries" | "runMode" | "autoReview" | "autoRepair" | "skipCompleted" | "qualityThreshold" | "repairMode", value: number | boolean | string) => setPipelineForm((prev) => ({ ...prev, [field]: value } as typeof prev)), maxOrder, onGenerateBible: () => void bibleSSE.start(`/novels/${id}/bible/generate`, { provider: llm.provider, model: llm.model, temperature: 0.6 }), onAbortBible: bibleSSE.abort, isBibleStreaming: bibleSSE.isStreaming, bibleStreamContent: bibleSSE.content, onGenerateBeats: () => void beatsSSE.start(`/novels/${id}/beats/generate`, { provider: llm.provider, model: llm.model, targetChapters: pipelineForm.endOrder }), onAbortBeats: beatsSSE.abort, isBeatsStreaming: beatsSSE.isStreaming, beatsStreamContent: beatsSSE.content, onRunPipeline: (patch?: Partial<typeof pipelineForm>) => runPipelineMutation.mutate(patch), isRunningPipeline: runPipelineMutation.isPending, pipelineMessage, pipelineJob: pipelineJobQuery.data?.data, chapters, selectedChapterId, onSelectedChapterChange: setSelectedChapterId, onReviewChapter: () => reviewMutation.mutate(), isReviewing: reviewMutation.isPending, onRepairChapter: () => { setRepairBeforeContent(selectedChapter?.content ?? ""); setRepairAfterContent(""); setActiveRepairStream(selectedChapter ? { chapterId: selectedChapter.id, chapterLabel: `第${selectedChapter.order}章 ${selectedChapter.title || "未命名章节"}` } : null); void repairSSE.start(`/novels/${id}/chapters/${selectedChapterId}/repair`, { provider: llm.provider, model: llm.model, reviewIssues: reviewResult?.issues ?? [], auditIssueIds: openAuditIssueIds }); }, isRepairing: repairSSE.isStreaming, onGenerateHook: () => hookMutation.mutate(), isGeneratingHook: hookMutation.isPending, reviewResult, repairBeforeContent, repairAfterContent, repairStreamContent: repairSSE.content, isRepairStreaming: repairSSE.isStreaming, onAbortRepair: handleAbortRepair, qualitySummary, chapterReports: qualityReportQuery.data?.data?.chapterReports ?? [], bible, plotBeats };
   const characterTab = { novelId: id, llmProvider: llm.provider, llmModel: llm.model, characterMessage, quickCharacterForm, onQuickCharacterFormChange: (field: "name" | "role", value: string) => setQuickCharacterForm((prev) => ({ ...prev, [field]: value })), onQuickCreateCharacter: (payload: QuickCharacterCreatePayload) => quickCreateCharacterMutation.mutate(payload), isQuickCreating: quickCreateCharacterMutation.isPending, onGenerateSupplementalCharacters: generateSupplementalCharacterMutation.mutateAsync, isGeneratingSupplementalCharacters: generateSupplementalCharacterMutation.isPending, onApplySupplementalCharacter: applySupplementalCharacterMutation.mutateAsync, isApplyingSupplementalCharacter: applySupplementalCharacterMutation.isPending, characters, coreCharacterCount, baseCharacters, selectedBaseCharacterId, onSelectedBaseCharacterChange: setSelectedBaseCharacterId, selectedBaseCharacter, importedBaseCharacterIds, onImportBaseCharacter: () => importBaseCharacterMutation.mutate(), isImportingBaseCharacter: importBaseCharacterMutation.isPending, selectedCharacterId, onSelectedCharacterChange: setSelectedCharacterId, onDeleteCharacter: (characterId: string) => deleteCharacterMutation.mutate(characterId), isDeletingCharacter: deleteCharacterMutation.isPending, deletingCharacterId: deleteCharacterMutation.variables ?? "", onSyncTimeline: () => syncTimelineMutation.mutate(), isSyncingTimeline: syncTimelineMutation.isPending, onSyncAllTimeline: () => syncAllTimelineMutation.mutate(), isSyncingAllTimeline: syncAllTimelineMutation.isPending, onEvolveCharacter: () => evolveCharacterMutation.mutate(), isEvolvingCharacter: evolveCharacterMutation.isPending, onWorldCheck: () => worldCheckMutation.mutate(), isCheckingWorld: worldCheckMutation.isPending, selectedCharacter, characterForm, onCharacterFormChange: (field: "name" | "role" | "gender" | "personality" | "background" | "development" | "currentState" | "currentGoal", value: string) => setCharacterForm((prev) => ({ ...prev, [field]: value })), onSaveCharacter: () => saveCharacterMutation.mutate(), isSavingCharacter: saveCharacterMutation.isPending, timelineEvents: characterTimelineQuery.data?.data ?? [] };
 

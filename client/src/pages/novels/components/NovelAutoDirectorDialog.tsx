@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import type { TaskStatus, UnifiedTaskDetail } from "@ai-novel/shared/types/task";
@@ -7,8 +7,11 @@ import { normalizeCommercialTags } from "@ai-novel/shared/types/novelFraming";
 import {
   DIRECTOR_CANDIDATE_SETUP_STEPS,
   DIRECTOR_CORRECTION_PRESETS,
+  extractDirectorTaskSeedPayloadFromMeta,
+  mergeDirectorCandidateBatches,
   type DirectorCandidate,
   type DirectorCandidateBatch,
+  type DirectorAutoExecutionPlan,
   type DirectorRunMode,
   type DirectorCorrectionPreset,
 } from "@ai-novel/shared/types/novelDirector";
@@ -36,6 +39,13 @@ import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toast";
 import { useLLMStore } from "@/store/llmStore";
 import type { NovelBasicFormState } from "../novelBasicInfo.shared";
+import {
+  DirectorAutoExecutionPlanFields,
+  buildDirectorAutoExecutionPlanFromDraft,
+  buildDirectorAutoExecutionPlanLabel,
+  createDefaultDirectorAutoExecutionDraftState,
+  normalizeDirectorAutoExecutionDraftState,
+} from "./directorAutoExecutionPlan.shared";
 import NovelCreateResourceRecommendationCard from "./NovelCreateResourceRecommendationCard";
 import NovelAutoDirectorProgressPanel from "./NovelAutoDirectorProgressPanel";
 
@@ -71,21 +81,18 @@ const RUN_MODE_OPTIONS: Array<{
   description: string;
 }> = [
   {
-    value: "stage_review",
-    label: "按重要阶段审核",
-    description: "推荐。AI 每到关键产物就停下，等你确认后再继续推进。",
-  },
-  {
     value: "auto_to_ready",
     label: "自动推进到可开写",
-    description: "AI 会持续推进，直到第 1 卷前 10 章细化完成后再交接。",
+    description: "AI 会持续推进，直到章节执行资源准备好后再交接。",
   },
   {
     value: "auto_to_execution",
-    label: "继续自动执行前 10 章",
-    description: "AI 会推进到第 1 卷前 10 章细化，并继续自动写作、审校和修复这一批章节。",
+    label: "继续自动执行章节批次",
+    description: "默认执行前 10 章，也可以改成指定章节范围或按卷执行。",
   },
 ];
+
+const DEFAULT_VISIBLE_RUN_MODE: DirectorRunMode = "auto_to_ready";
 
 function buildInitialIdea(basicForm: NovelBasicFormState): string {
   const lines = [
@@ -228,9 +235,11 @@ export default function NovelAutoDirectorDialog({
   const [executionRequested, setExecutionRequested] = useState(false);
   const [pendingTitleHint, setPendingTitleHint] = useState("");
   const [executionError, setExecutionError] = useState("");
-  const [runMode, setRunMode] = useState<DirectorRunMode>("stage_review");
+  const [runMode, setRunMode] = useState<DirectorRunMode>(DEFAULT_VISIBLE_RUN_MODE);
+  const [autoExecutionDraft, setAutoExecutionDraft] = useState(() => createDefaultDirectorAutoExecutionDraftState());
   const [candidatePatchFeedbacks, setCandidatePatchFeedbacks] = useState<Record<string, string>>({});
   const [titlePatchFeedbacks, setTitlePatchFeedbacks] = useState<Record<string, string>>({});
+  const confirmSubmitLockedRef = useRef(false);
 
   useEffect(() => {
     if (!workflowTaskIdProp || workflowTaskIdProp === workflowTaskId) {
@@ -250,11 +259,7 @@ export default function NovelAutoDirectorDialog({
     if (!restoredTask) {
       return;
     }
-    const seedPayload = (restoredTask.meta.seedPayload ?? null) as {
-      idea?: string;
-      batches?: DirectorCandidateBatch[];
-      runMode?: DirectorRunMode;
-    } | null;
+    const seedPayload = extractDirectorTaskSeedPayloadFromMeta(restoredTask.meta);
     if (restoredTask.id && restoredTask.id !== workflowTaskId) {
       setWorkflowTaskId(restoredTask.id);
     }
@@ -269,7 +274,10 @@ export default function NovelAutoDirectorDialog({
       || seedPayload?.runMode === "auto_to_execution"
       || seedPayload?.runMode === "stage_review"
     ) {
-      setRunMode(seedPayload.runMode);
+      setRunMode(seedPayload.runMode === "stage_review" ? DEFAULT_VISIBLE_RUN_MODE : seedPayload.runMode);
+    }
+    if (seedPayload?.autoExecutionPlan) {
+      setAutoExecutionDraft(normalizeDirectorAutoExecutionDraftState(seedPayload.autoExecutionPlan));
     }
     if (initialOpen) {
       setOpen(true);
@@ -306,6 +314,15 @@ export default function NovelAutoDirectorDialog({
     }
     return restoredTask?.id === workflowTaskId ? restoredTask : null;
   }, [directorTaskQuery.data?.data, restoredTask, workflowTaskId]);
+
+  useEffect(() => {
+    const seededBatches = extractDirectorTaskSeedPayloadFromMeta(directorTask?.meta)?.batches;
+    if (!Array.isArray(seededBatches) || seededBatches.length === 0) {
+      return;
+    }
+    setBatches((prev) => mergeDirectorCandidateBatches(prev, seededBatches));
+  }, [directorTask]);
+
   const candidateSetupInProgress = Boolean(
     directorTask
     && ACTIVE_TASK_STATUSES.has(directorTask.status)
@@ -341,6 +358,9 @@ export default function NovelAutoDirectorDialog({
     if (workflowTaskId) {
       return workflowTaskId;
     }
+      const autoExecutionPlan = runMode === "auto_to_execution"
+        ? buildDirectorAutoExecutionPlanFromDraft(autoExecutionDraft)
+        : undefined;
       const response = await bootstrapNovelWorkflow({
         lane: "auto_director",
         title: basicForm.title.trim() || undefined,
@@ -349,6 +369,7 @@ export default function NovelAutoDirectorDialog({
           idea,
           batches,
           runMode,
+          autoExecutionPlan,
         },
       });
     const taskId = response.data?.id ?? "";
@@ -401,7 +422,7 @@ export default function NovelAutoDirectorDialog({
         setWorkflowTaskId(nextWorkflowTaskId);
         onWorkflowTaskChange?.(nextWorkflowTaskId);
       }
-      setBatches((prev) => [...prev, batch]);
+      setBatches((prev) => mergeDirectorCandidateBatches(prev, [batch]));
       setFeedback("");
       setSelectedPresets([]);
       setDialogMode("candidate_selection");
@@ -490,11 +511,15 @@ export default function NovelAutoDirectorDialog({
   const confirmMutation = useMutation({
     mutationFn: async (payload: { candidate: DirectorCandidate; workflowTaskId?: string }) => {
       const currentWorkflowTaskId = payload.workflowTaskId || await ensureWorkflowTask();
+      const autoExecutionPlan = runMode === "auto_to_execution"
+        ? buildDirectorAutoExecutionPlanFromDraft(autoExecutionDraft)
+        : undefined;
       const response = await confirmDirectorCandidate({
         ...buildRequestPayload(basicForm, idea, llm, runMode, currentWorkflowTaskId),
         batchId: latestBatch?.id,
         round: latestBatch?.round,
         candidate: payload.candidate,
+        autoExecutionPlan,
       });
       return {
         data: response.data ?? null,
@@ -519,7 +544,9 @@ export default function NovelAutoDirectorDialog({
         data.directorSession?.runMode === "stage_review"
           ? `已创建《${data.novel.title}》，自动导演会在关键阶段停下等你审核。`
           : data.directorSession?.runMode === "auto_to_execution"
-            ? `已创建《${data.novel.title}》，自动导演会继续自动执行前 10 章。`
+            ? `已创建《${data.novel.title}》，自动导演会继续自动执行${
+              buildDirectorAutoExecutionPlanLabel(buildDirectorAutoExecutionPlanFromDraft(autoExecutionDraft))
+            }。`
             : `已创建《${data.novel.title}》，自动导演会继续在后台推进到可开写。`,
       );
       resetDialogState();
@@ -538,6 +565,9 @@ export default function NovelAutoDirectorDialog({
           queryKey: queryKeys.tasks.detail("novel_workflow", payload.workflowTaskId),
         });
       }
+    },
+    onSettled: () => {
+      confirmSubmitLockedRef.current = false;
     },
   });
 
@@ -586,13 +616,18 @@ export default function NovelAutoDirectorDialog({
     setExecutionRequested(false);
     setPendingTitleHint("");
     setExecutionError("");
-    setRunMode("stage_review");
+    setRunMode(DEFAULT_VISIBLE_RUN_MODE);
+    setAutoExecutionDraft(createDefaultDirectorAutoExecutionDraftState());
     setCandidatePatchFeedbacks({});
     setTitlePatchFeedbacks({});
   };
 
   const canGenerate = idea.trim().length > 0 && !generateMutation.isPending;
   const handleConfirmCandidate = async (candidate: DirectorCandidate) => {
+    if (confirmSubmitLockedRef.current || confirmMutation.isPending) {
+      return;
+    }
+    confirmSubmitLockedRef.current = true;
     try {
       const currentWorkflowTaskId = await ensureWorkflowTask();
       setPendingTitleHint(candidate.workingTitle);
@@ -610,6 +645,7 @@ export default function NovelAutoDirectorDialog({
         workflowTaskId: currentWorkflowTaskId,
       });
     } catch (error) {
+      confirmSubmitLockedRef.current = false;
       const message = error instanceof Error ? error.message : "创建导演主任务失败。";
       setDialogMode("candidate_selection");
       setExecutionRequested(false);
@@ -727,6 +763,12 @@ export default function NovelAutoDirectorDialog({
                       );
                     })}
                   </div>
+                  {runMode === "auto_to_execution" ? (
+                    <DirectorAutoExecutionPlanFields
+                      draft={autoExecutionDraft}
+                      onChange={(patch) => setAutoExecutionDraft((prev) => ({ ...prev, ...patch }))}
+                    />
+                  ) : null}
                 </div>
                 <div className="mt-3 rounded-md border bg-muted/20 p-3">
                   <div className="text-xs font-medium text-foreground">当前会一起参与判断的创建页信息</div>

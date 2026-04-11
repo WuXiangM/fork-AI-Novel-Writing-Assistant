@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 
 const MODEL_BADGE_COLLAPSE_COUNT = 8;
 
@@ -173,11 +174,28 @@ export default function SettingsPage() {
   });
 
   const testMutation = useMutation({
-    mutationFn: (payload: { provider: LLMProvider; apiKey?: string; model?: string; baseURL?: string }) =>
-      testLLMConnection(payload),
+    mutationFn: (payload: {
+      provider: LLMProvider;
+      apiKey?: string;
+      model?: string;
+      baseURL?: string;
+      probeMode?: "plain" | "structured" | "both";
+    }) => testLLMConnection(payload),
     onSuccess: (response) => {
       const latency = response.data?.latency ?? 0;
-      setTestResult(`连接成功，延迟 ${latency}ms`);
+      const plain = response.data?.plain;
+      const structured = response.data?.structured;
+      const plainText = plain
+        ? plain.ok
+          ? `普通连通正常${plain.latency != null ? ` (${plain.latency}ms)` : ""}`
+          : `普通连通失败${plain.error ? `：${plain.error}` : ""}`
+        : "普通连通未检测";
+      const structuredText = structured
+        ? structured.ok
+          ? `结构化正常${structured.strategy ? `，策略 ${structured.strategy}` : ""}${structured.reasoningForcedOff ? "，已强制关闭 thinking" : ""}`
+          : `结构化失败${structured.errorCategory ? `，分类 ${structured.errorCategory}` : ""}${structured.error ? `：${structured.error}` : ""}`
+        : "结构化未检测";
+      setTestResult(`连接成功，总耗时 ${latency}ms · ${plainText} · ${structuredText}`);
     },
     onError: (error) => {
       setTestResult(error instanceof Error ? error.message : "连接测试失败。");
@@ -194,6 +212,21 @@ export default function SettingsPage() {
     },
     onError: (error) => {
       setActionResult(error instanceof Error ? error.message : "刷新模型列表失败。");
+    },
+  });
+
+  const toggleReasoningMutation = useMutation({
+    mutationFn: (payload: { provider: LLMProvider; reasoningEnabled: boolean }) =>
+      saveAPIKeySetting(payload.provider, {
+        reasoningEnabled: payload.reasoningEnabled,
+      }),
+    onSuccess: async (_response, variables) => {
+      const providerName = providerConfigs.find((item) => item.provider === variables.provider)?.name ?? variables.provider;
+      setActionResult(`${providerName} 思考功能已${variables.reasoningEnabled ? "开启" : "关闭"}。`);
+      await invalidateProviderQueries();
+    },
+    onError: (error) => {
+      setActionResult(error instanceof Error ? error.message : "更新思考开关失败。");
     },
   });
 
@@ -331,6 +364,8 @@ export default function SettingsPage() {
             const isBalanceRefreshing = refreshBalanceMutation.isPending && refreshBalanceMutation.variables === item.provider;
             const isBalanceLoading = providerBalancesQuery.isLoading && !balance;
             const refreshBalanceEnabled = canRefreshBalance(item.provider, item.kind, item.isConfigured);
+            const isReasoningUpdating = toggleReasoningMutation.isPending
+              && toggleReasoningMutation.variables?.provider === item.provider;
             return (
               <div
                 key={item.provider}
@@ -354,6 +389,30 @@ export default function SettingsPage() {
                 </div>
                 <div className="mb-2 text-xs text-muted-foreground">Current model: {item.currentModel || "-"}</div>
                 <div className="mb-2 text-xs text-muted-foreground">API URL: {item.currentBaseURL || "-"}</div>
+                <div className="mb-3 flex items-center justify-between rounded-md border bg-background/60 px-3 py-2">
+                  <div className="space-y-1">
+                    <div className="text-xs font-medium text-muted-foreground">思考功能</div>
+                    <div className="text-xs text-muted-foreground">
+                      {item.reasoningEnabled
+                        ? "当前会返回并展示模型思考内容。"
+                        : "当前会隐藏思考内容；MiniMax 会自动启用分离与清洗，避免 <think> 泄漏到正文。"}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">{item.reasoningEnabled ? "已开启" : "已关闭"}</span>
+                    <Switch
+                      checked={item.reasoningEnabled}
+                      disabled={isReasoningUpdating}
+                      onCheckedChange={(checked) => {
+                        setActionResult("");
+                        toggleReasoningMutation.mutate({
+                          provider: item.provider,
+                          reasoningEnabled: checked,
+                        });
+                      }}
+                    />
+                  </div>
+                </div>
                 <div className="mb-3 rounded-md border border-dashed bg-background/60 p-3">
                   {item.kind === "custom" ? (
                     <div className="space-y-1">
@@ -592,6 +651,7 @@ export default function SettingsPage() {
                     apiKey: form.key.trim() ? form.key : undefined,
                     model: form.model.trim() || undefined,
                     baseURL: form.baseURL.trim() ? form.baseURL : undefined,
+                    probeMode: "both",
                   })
                 }
                 disabled={testMutation.isPending || !form.model.trim() || !form.baseURL.trim()}

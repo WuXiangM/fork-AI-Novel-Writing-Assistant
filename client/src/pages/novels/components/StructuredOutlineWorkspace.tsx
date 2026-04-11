@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import AiButton from "@/components/common/AiButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,7 +8,10 @@ import {
   getStructuredOutlineWorkspaceDefaults,
   useStructuredOutlineWorkspaceStore,
 } from "../stores/useStructuredOutlineWorkspaceStore";
-import { hasChapterExecutionDetail } from "../chapterDetailPlanning.shared";
+import {
+  getChapterExecutionDetailStatus,
+  hasChapterExecutionDetail,
+} from "../chapterDetailPlanning.shared";
 import { findBeatSheet } from "../volumePlan.utils";
 import StructuredChapterDetailCard from "./StructuredChapterDetailCard";
 import WorldInjectionHint from "./WorldInjectionHint";
@@ -76,6 +80,17 @@ function getWorkspaceGuidance(params: {
       : `已聚焦到「${selectedBeat.label}」，当前显示 ${visibleChapterCount} 章，接下来在左侧选择要细化的章节。`;
   }
   return `当前展示本卷全部 ${totalChapterCount} 章。建议先点一个节奏段，让系统把对应章节收束出来，再开始细化。`;
+}
+
+function renderChapterDetailStatusBadge(chapter: StructuredChapter) {
+  const status = getChapterExecutionDetailStatus(chapter);
+  if (status === "complete") {
+    return <Badge variant="secondary">已细化</Badge>;
+  }
+  if (status === "partial") {
+    return <Badge>细化中</Badge>;
+  }
+  return <Badge variant="outline">待细化</Badge>;
 }
 
 export default function StructuredOutlineWorkspace(props: StructuredTabViewProps) {
@@ -367,13 +382,13 @@ export default function StructuredOutlineWorkspace(props: StructuredTabViewProps
                   <CardTitle className="text-base">当前卷节奏</CardTitle>
                   <div className="text-sm text-muted-foreground">先在这里定位当前卷推进区间，再到下面左侧章节导航里选当前要细化的章。</div>
                 </div>
-                <Button
+                <AiButton
                   variant="outline"
                   onClick={() => onGenerateBeatSheet(selectedVolume.id)}
                   disabled={isGeneratingBeatSheet || !readiness.canGenerateBeatSheet}
                 >
                   {isGeneratingBeatSheet ? "生成中..." : "生成当前卷节奏板"}
-                </Button>
+                </AiButton>
               </div>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -473,12 +488,12 @@ export default function StructuredOutlineWorkspace(props: StructuredTabViewProps
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <Button
+                    <AiButton
                       onClick={() => onGenerateChapterList(selectedVolume.id)}
                       disabled={isGeneratingChapterList || locked}
                     >
                       {isGeneratingChapterList ? "生成中..." : "生成当前卷章节列表"}
-                    </Button>
+                    </AiButton>
                     <Button size="sm" variant="outline" onClick={() => onAddChapter(selectedVolume.id)}>
                       新增章节
                     </Button>
@@ -515,7 +530,7 @@ export default function StructuredOutlineWorkspace(props: StructuredTabViewProps
                               <Badge variant={isSelected ? "default" : "outline"}>第{chapter.chapterOrder}章</Badge>
                               {chapterBeat ? <Badge variant="secondary">{chapterBeat.label}</Badge> : null}
                             </div>
-                            {hasChapterExecutionDetail(chapter) ? <Badge variant="secondary">已细化</Badge> : <Badge variant="outline">待细化</Badge>}
+                            {renderChapterDetailStatusBadge(chapter)}
                           </div>
                           <div className="mt-2 text-sm font-medium">{chapter.title || `第${chapter.chapterOrder}章`}</div>
                           <div className="mt-1 line-clamp-1 text-xs text-muted-foreground">
@@ -607,7 +622,7 @@ export default function StructuredOutlineWorkspace(props: StructuredTabViewProps
                     <div className="flex flex-wrap gap-2">
                       <Button size="sm" variant="outline" onClick={() => onApplyBatch({ conflictLevel: 60 })}>统一冲突等级 60</Button>
                       <Button size="sm" variant="outline" onClick={() => onApplyBatch({ targetWordCount: 2500 })}>统一字数 2500</Button>
-                      <Button size="sm" onClick={() => onApplyBatch({ generateTaskSheet: true })}>批量补任务单</Button>
+                      <AiButton size="sm" onClick={() => onApplyBatch({ generateTaskSheet: true })}>批量补任务单</AiButton>
                       <Button onClick={() => onApplySync(syncOptions)} disabled={isApplyingSync}>
                         {isApplyingSync ? "同步中..." : "同步到章节执行"}
                       </Button>

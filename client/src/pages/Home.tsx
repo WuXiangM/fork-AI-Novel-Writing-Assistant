@@ -14,11 +14,13 @@ import {
   canContinueDirector,
   canContinueFront10AutoExecution,
   canEnterChapterExecution,
+  getCandidateSelectionLink,
   getTaskCenterLink,
   getWorkflowBadge,
   getWorkflowDescription,
   isLiveWorkflowTask,
   isWorkflowActionRequired,
+  requiresCandidateSelection,
 } from "@/lib/novelWorkflowTaskUi";
 import { toast } from "@/components/ui/toast";
 
@@ -45,19 +47,22 @@ function getNovelPriorityScore(novel: HomeNovelItem): number {
   if (canContinueFront10AutoExecution(task)) {
     return 0;
   }
-  if (canContinueDirector(task)) {
+  if (requiresCandidateSelection(task)) {
     return 1;
   }
-  if (task?.status === "running" || task?.status === "queued") {
+  if (canContinueDirector(task)) {
     return 2;
   }
-  if (canEnterChapterExecution(task)) {
+  if (task?.status === "running" || task?.status === "queued") {
     return 3;
   }
-  if (task?.status === "failed" || task?.status === "cancelled") {
+  if (canEnterChapterExecution(task)) {
     return 4;
   }
-  return 5;
+  if (task?.status === "failed" || task?.status === "cancelled") {
+    return 5;
+  }
+  return 6;
 }
 
 function getNovelLeadSummary(novel: HomeNovelItem): string {
@@ -213,7 +218,7 @@ export default function Home() {
           }}
           disabled={isWorkflowPending}
         >
-          {isWorkflowPending ? "继续执行中..." : "继续自动执行前 10 章"}
+          {isWorkflowPending ? "继续执行中..." : (task?.resumeAction ?? "继续自动执行前 10 章")}
         </Button>
       );
     }
@@ -233,7 +238,20 @@ export default function Home() {
           }}
           disabled={isWorkflowPending}
         >
-          {isWorkflowPending ? "继续中..." : "继续导演"}
+          {isWorkflowPending ? "继续中..." : (task?.resumeAction ?? "继续导演")}
+        </Button>
+      );
+    }
+
+    if (requiresCandidateSelection(task)) {
+      return (
+        <Button asChild size={size}>
+          <Link
+            to={getCandidateSelectionLink(task!.id)}
+            onClick={stopPropagation ? stopCardClick : undefined}
+          >
+            {task!.resumeAction ?? "继续确认书级方向"}
+          </Link>
         </Button>
       );
     }
@@ -397,6 +415,9 @@ export default function Home() {
                     {primaryNovel.latestAutoDirectorTask?.currentStage ? (
                       <span>当前阶段：{primaryNovel.latestAutoDirectorTask.currentStage}</span>
                     ) : null}
+                    {primaryNovel.latestAutoDirectorTask?.lastHealthyStage ? (
+                      <span>最近健康阶段：{primaryNovel.latestAutoDirectorTask.lastHealthyStage}</span>
+                    ) : null}
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -534,6 +555,9 @@ export default function Home() {
                         <span>角色数：{novel._count.characters}</span>
                         {workflowTask?.currentStage ? (
                           <span>阶段：{workflowTask.currentStage}</span>
+                        ) : null}
+                        {workflowTask?.lastHealthyStage ? (
+                          <span>最近健康阶段：{workflowTask.lastHealthyStage}</span>
                         ) : null}
                       </div>
 

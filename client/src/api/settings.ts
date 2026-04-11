@@ -18,6 +18,7 @@ export interface APIKeyStatus {
   requiresApiKey: boolean;
   isConfigured: boolean;
   isActive: boolean;
+  reasoningEnabled: boolean;
 }
 
 export type ProviderBalanceStatusKind = "available" | "missing_api_key" | "unsupported" | "error";
@@ -93,11 +94,37 @@ export interface ModelRouteConnectivityStatus {
   ok: boolean;
   latency: number | null;
   error: string | null;
+  plain: {
+    ok: boolean;
+    latency: number | null;
+    error: string | null;
+  } | null;
+  structured: {
+    ok: boolean;
+    latency: number | null;
+    error: string | null;
+    strategy: string | null;
+    reasoningForcedOff: boolean;
+    fallbackAvailable: boolean;
+    fallbackUsed: boolean;
+    errorCategory: string | null;
+    nativeJsonObject: boolean;
+    nativeJsonSchema: boolean;
+    profileFamily: string | null;
+  } | null;
 }
 
 export interface ModelRouteConnectivityResponse {
   testedAt: string;
   statuses: ModelRouteConnectivityStatus[];
+}
+
+export interface StructuredFallbackSettings {
+  enabled: boolean;
+  provider: LLMProvider;
+  model: string;
+  temperature: number;
+  maxTokens: number | null;
 }
 
 export async function getAPIKeySettings() {
@@ -168,6 +195,7 @@ export async function saveAPIKeySetting(
     model?: string;
     baseURL?: string;
     isActive?: boolean;
+    reasoningEnabled?: boolean;
   },
 ) {
   const { data } = await apiClient.put<
@@ -177,6 +205,7 @@ export async function saveAPIKeySetting(
       model: string | null;
       baseURL: string | null;
       isActive: boolean;
+      reasoningEnabled: boolean;
       models: string[];
     }>
   >(`/settings/api-keys/${provider}`, payload);
@@ -189,6 +218,7 @@ export async function createCustomProvider(payload: {
   model: string;
   baseURL: string;
   isActive?: boolean;
+  reasoningEnabled?: boolean;
 }) {
   const { data } = await apiClient.post<
     ApiResponse<{
@@ -197,6 +227,7 @@ export async function createCustomProvider(payload: {
       model: string | null;
       baseURL: string | null;
       isActive: boolean;
+      reasoningEnabled: boolean;
       models: string[];
     }>
   >("/settings/custom-providers", payload);
@@ -239,12 +270,46 @@ export async function saveModelRoute(payload: ModelRouteConfig) {
   return data;
 }
 
-export async function testLLMConnection(payload: { provider: LLMProvider; apiKey?: string; model?: string; baseURL?: string }) {
+export async function getStructuredFallbackConfig() {
+  const { data } = await apiClient.get<ApiResponse<StructuredFallbackSettings>>("/llm/structured-fallback");
+  return data;
+}
+
+export async function saveStructuredFallbackConfig(payload: Partial<StructuredFallbackSettings>) {
+  const { data } = await apiClient.put<ApiResponse<StructuredFallbackSettings>>("/llm/structured-fallback", payload);
+  return data;
+}
+
+export async function testLLMConnection(payload: {
+  provider: LLMProvider;
+  apiKey?: string;
+  model?: string;
+  baseURL?: string;
+  probeMode?: "plain" | "structured" | "both";
+}) {
   const { data } = await apiClient.post<
     ApiResponse<{
       success: boolean;
       model: string;
       latency: number;
+      plain: {
+        ok: boolean;
+        latency: number | null;
+        error: string | null;
+      } | null;
+      structured: {
+        ok: boolean;
+        latency: number | null;
+        error: string | null;
+        strategy: string | null;
+        reasoningForcedOff: boolean;
+        fallbackAvailable: boolean;
+        fallbackUsed: boolean;
+        errorCategory: string | null;
+        nativeJsonObject: boolean;
+        nativeJsonSchema: boolean;
+        profileFamily: string | null;
+      } | null;
     }>
   >("/llm/test", payload);
   return data;

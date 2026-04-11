@@ -1,5 +1,7 @@
 import type { Chapter } from "@ai-novel/shared/types/novel";
 import { Link } from "react-router-dom";
+import AiButton from "@/components/common/AiButton";
+import AiActionLabel from "@/components/common/AiActionLabel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -10,6 +12,7 @@ export type PrimaryAction = {
   label: string;
   reason: string;
   variant: "default" | "secondary" | "outline";
+  ai?: boolean;
   disabled?: boolean;
   onClick?: () => void;
   href?: string;
@@ -30,13 +33,32 @@ export function chapterStatusLabel(status?: Chapter["chapterStatus"] | null): st
     case "generating":
       return "写作中";
     case "pending_review":
-      return "待审校";
+      return "待确认";
     case "needs_repair":
       return "待修复";
     case "completed":
       return "已完成";
     default:
       return "未设置";
+  }
+}
+
+export function chapterStatusDescription(status?: Chapter["chapterStatus"] | null): string {
+  switch (status) {
+    case "unplanned":
+      return "待准备：这章还缺少执行素材，通常要先补章节目标、任务单或场景卡。";
+    case "pending_generation":
+      return "待写作：章节计划已基本齐备，可以开始生成正文。";
+    case "generating":
+      return "写作中：AI 正在生成本章正文，或正在做生成后的收尾处理。";
+    case "pending_review":
+      return "待确认：正文已经进入确认阶段，建议查看审校结果并决定是否继续修复或确认通过。";
+    case "needs_repair":
+      return "待修复：审校发现了问题，建议先修复再继续推进。";
+    case "completed":
+      return "已完成：本章已通过当前流程，可以继续润色或进入下一章。";
+    default:
+      return "未设置：当前章节还没有明确的流程状态。";
   }
 }
 
@@ -54,6 +76,25 @@ export function generationStateLabel(state?: Chapter["generationState"] | null):
       return "已确认";
     case "published":
       return "已发布";
+    default:
+      return "";
+  }
+}
+
+export function generationStateDescription(state?: Chapter["generationState"] | null): string {
+  switch (state) {
+    case "planned":
+      return "已入目录：章节已进入目录或拆章结果，但还没有正文草稿。";
+    case "drafted":
+      return "已成稿：已经生成过正文草稿，但还没完成审校确认。";
+    case "reviewed":
+      return "已审校：已经完成一轮审校，后续可能继续修复或确认。";
+    case "repaired":
+      return "已修复：已经根据问题修过一轮，通常下一步是再次审校或确认。";
+    case "approved":
+      return "已确认：本章已通过当前质量门槛，自动执行时会视为已完成并跳过。";
+    case "published":
+      return "已发布：本章已进入发布状态，自动执行不会再重复生成。";
     default:
       return "";
   }
@@ -85,7 +126,11 @@ export function chapterHasPreparationAssets(chapter: Chapter): boolean {
 export function chapterSuggestedActionLabel(chapter: Chapter): string {
   if (chapter.chapterStatus === "generating") return "等待生成";
   if (chapter.chapterStatus === "needs_repair") return "修复问题";
-  if (chapter.chapterStatus === "pending_review") return "运行审校";
+  if (chapter.chapterStatus === "pending_review") {
+    return chapter.generationState === "reviewed" || chapter.generationState === "approved"
+      ? "确认结果"
+      : "运行审校";
+  }
   if (chapter.chapterStatus === "completed") return "继续润色";
   if (chapter.chapterStatus === "unplanned" || !chapterHasPreparationAssets(chapter)) return "补章节计划";
   if (!hasText(chapter.content) || chapter.chapterStatus === "pending_generation") return "写本章";
@@ -138,21 +183,29 @@ export function RiskBadgeList(props: { risks: string[] }) {
   );
 }
 
-export function PrimaryActionButton(props: { action: PrimaryAction | null }) {
-  const { action } = props;
+export function PrimaryActionButton(props: { action: PrimaryAction | null; className?: string }) {
+  const { action, className } = props;
   if (!action) {
     return null;
   }
   if (action.href) {
     return (
-      <Button asChild size="sm" variant={action.variant}>
-        <Link to={action.href}>{action.label}</Link>
+      <Button asChild size="sm" variant={action.variant} className={className}>
+        <Link to={action.href}>
+          {action.ai ? <AiActionLabel>{action.label}</AiActionLabel> : action.label}
+        </Link>
       </Button>
     );
   }
   return (
-    <Button size="sm" variant={action.variant} onClick={action.onClick} disabled={action.disabled}>
-      {action.label}
-    </Button>
+    action.ai ? (
+      <AiButton size="sm" variant={action.variant} className={className} onClick={action.onClick} disabled={action.disabled}>
+        {action.label}
+      </AiButton>
+    ) : (
+      <Button size="sm" variant={action.variant} className={className} onClick={action.onClick} disabled={action.disabled}>
+        {action.label}
+      </Button>
+    )
   );
 }

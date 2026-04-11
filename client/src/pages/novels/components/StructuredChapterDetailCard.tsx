@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
+import AiButton from "@/components/common/AiButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
-  hasChapterExecutionDetail,
+  getChapterExecutionDetailStatus,
   type ChapterDetailBatchSelection,
 } from "../chapterDetailPlanning.shared";
 import type { StructuredTabViewProps } from "./NovelEditView.types";
@@ -21,6 +22,18 @@ interface BatchPlan {
   count: number;
   hint: string;
   request: ChapterDetailBatchSelection;
+}
+
+function renderChapterDetailStatusBadge(
+  status: ReturnType<typeof getChapterExecutionDetailStatus>,
+) {
+  if (status === "complete") {
+    return <Badge variant="secondary">已细化</Badge>;
+  }
+  if (status === "partial") {
+    return <Badge>细化中</Badge>;
+  }
+  return <Badge variant="outline">待细化</Badge>;
 }
 
 interface StructuredChapterDetailCardProps {
@@ -76,6 +89,7 @@ export default function StructuredChapterDetailCard(props: StructuredChapterDeta
   const hasVisibleBatch = visibleChapters.length > 1 && visibleChapters.length < volumeChapters.length;
   const hasVolumeBatch = volumeChapters.length > 1;
   const hasCountBatch = remainingChapters.length > 1;
+  const chapterDetailStatus = selectedChapter ? getChapterExecutionDetailStatus(selectedChapter) : "empty";
 
   useEffect(() => {
     if (hasCountBatch) {
@@ -171,7 +185,7 @@ export default function StructuredChapterDetailCard(props: StructuredChapterDeta
                 <>
                   <Badge variant="outline">第{selectedChapter.chapterOrder}章</Badge>
                   {selectedChapterBeatLabel ? <Badge variant="secondary">{selectedChapterBeatLabel}</Badge> : null}
-                  {hasChapterExecutionDetail(selectedChapter) ? <Badge variant="secondary">已细化</Badge> : <Badge variant="outline">待细化</Badge>}
+                  {renderChapterDetailStatusBadge(chapterDetailStatus)}
                 </>
               ) : null}
             </div>
@@ -183,13 +197,13 @@ export default function StructuredChapterDetailCard(props: StructuredChapterDeta
           </div>
           <div className="flex flex-wrap gap-2">
             {selectedVolume && selectedChapter ? (
-              <Button
+              <AiButton
                 size="sm"
                 onClick={() => onGenerateChapterDetailBundle(selectedVolume.id, selectedChapter.id)}
                 disabled={isGeneratingChapterDetail || locked}
               >
                 {currentBundleRunning ? "当前章细化中..." : "细化当前章"}
-              </Button>
+              </AiButton>
             ) : null}
             <Button size="sm" variant="outline" onClick={onToggleAdvanced}>
               {showChapterAdvanced ? "收起高级设置" : "展开高级设置"}
@@ -208,14 +222,14 @@ export default function StructuredChapterDetailCard(props: StructuredChapterDeta
                     可以从当前章起按数量连续细化，也可以直接补齐当前可见章节或本卷全部章节。
                   </div>
                 </div>
-                <Button
+                <AiButton
                   size="sm"
                   variant="secondary"
                   onClick={() => onGenerateChapterDetailBundle(selectedVolume.id, batchPlan?.request ?? { chapterIds: [] })}
                   disabled={isGeneratingChapterDetail || locked || !batchPlan}
                 >
                   {isGeneratingChapterDetailBundle ? "批量细化中..." : `批量细化${batchPlan ? ` ${batchPlan.count} 章` : ""}`}
-                </Button>
+                </AiButton>
               </div>
 
               <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_160px]">
@@ -277,14 +291,14 @@ export default function StructuredChapterDetailCard(props: StructuredChapterDeta
             <label className="space-y-2 text-sm">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs text-muted-foreground">章节目标</span>
-                <Button
+                <AiButton
                   size="sm"
                   variant="outline"
                   onClick={() => onGenerateChapterDetail(selectedVolume.id, selectedChapter.id, "purpose")}
                   disabled={isGeneratingChapterDetail || locked}
                 >
                   {isGeneratingChapterDetail && generatingChapterDetailMode === "purpose" && generatingChapterDetailChapterId === selectedChapter.id ? "修正中..." : "AI修正"}
-                </Button>
+                </AiButton>
               </div>
               <textarea
                 className={cn(textareaClassName, "min-h-[110px]")}
@@ -296,14 +310,14 @@ export default function StructuredChapterDetailCard(props: StructuredChapterDeta
             <label className="space-y-2 text-sm">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs text-muted-foreground">任务单</span>
-                <Button
+                <AiButton
                   size="sm"
                   variant="outline"
                   onClick={() => onGenerateChapterDetail(selectedVolume.id, selectedChapter.id, "task_sheet")}
                   disabled={isGeneratingChapterDetail || locked}
                 >
                   {isGeneratingChapterDetail && generatingChapterDetailMode === "task_sheet" && generatingChapterDetailChapterId === selectedChapter.id ? "修正中..." : "AI修正"}
-                </Button>
+                </AiButton>
               </div>
               <textarea
                 className={cn(textareaClassName, "min-h-[130px]")}

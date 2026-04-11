@@ -186,6 +186,18 @@ const promptAssetLoaderByKey = createPromptAssetLoaderRegistry([
     load: () => require("./prompts/novel/characterPreparation.prompts").characterCastOptionNormalizePrompt as UnknownPromptAsset,
   },
   {
+    key: "novel.character.castAuto@v1",
+    load: () => require("./prompts/novel/characterPreparation.prompts").characterCastAutoPrompt as UnknownPromptAsset,
+  },
+  {
+    key: "novel.character.castAuto.repair@v1",
+    load: () => require("./prompts/novel/characterPreparation.prompts").characterCastAutoRepairPrompt as UnknownPromptAsset,
+  },
+  {
+    key: "novel.character.castAuto.zhNormalize@v1",
+    load: () => require("./prompts/novel/characterPreparation.prompts").characterCastAutoNormalizePrompt as UnknownPromptAsset,
+  },
+  {
     key: "novel.character.supplemental@v1",
     load: () => require("./prompts/novel/characterPreparation.prompts").supplementalCharacterPrompt as UnknownPromptAsset,
   },
@@ -208,6 +220,10 @@ const promptAssetLoaderByKey = createPromptAssetLoaderRegistry([
   {
     key: "novel.chapter.writer@v2",
     load: () => require("./prompts/novel/chapterWriter.prompts").chapterWriterPrompt as UnknownPromptAsset,
+  },
+  {
+    key: "novel.chapter_editor.rewrite_candidates@v1",
+    load: () => require("./prompts/novel/chapterEditor/rewriteCandidates.prompts").chapterEditorRewriteCandidatesPrompt as UnknownPromptAsset,
   },
   {
     key: "novel.review.chapter@v1",
@@ -242,7 +258,7 @@ const promptAssetLoaderByKey = createPromptAssetLoaderRegistry([
     load: () => require("./prompts/novel/resourceRecommendation.prompts").novelCreateResourceRecommendationPrompt as UnknownPromptAsset,
   },
   {
-    key: "novel.payoff_ledger.sync@v1",
+    key: "novel.payoff_ledger.sync@v2",
     load: () => require("./prompts/payoff/payoffLedgerSync.prompts").payoffLedgerSyncPrompt as UnknownPromptAsset,
   },
   {
@@ -282,7 +298,7 @@ const promptAssetLoaderByKey = createPromptAssetLoaderRegistry([
     load: () => require("./prompts/style/style.prompts").styleProfileExtractionPrompt as UnknownPromptAsset,
   },
   {
-    key: "style.profile.from_book_analysis@v1",
+    key: "style.profile.from_book_analysis@v2",
     load: () => require("./prompts/style/style.prompts").styleProfileFromBookAnalysisPrompt as UnknownPromptAsset,
   },
   {

@@ -84,10 +84,28 @@ export const DIRECTOR_RUN_MODES = [
 
 export type DirectorRunMode = typeof DIRECTOR_RUN_MODES[number];
 
+export const DIRECTOR_AUTO_EXECUTION_MODES = [
+  "front10",
+  "chapter_range",
+  "volume",
+] as const;
+
+export type DirectorAutoExecutionMode = typeof DIRECTOR_AUTO_EXECUTION_MODES[number];
+
+export interface DirectorAutoExecutionPlan {
+  mode: DirectorAutoExecutionMode;
+  startOrder?: number;
+  endOrder?: number;
+  volumeOrder?: number;
+}
+
 export type DirectorContinuationMode = "resume" | "auto_execute_front10";
 
-export interface DirectorAutoExecutionState {
+export interface DirectorAutoExecutionState extends DirectorAutoExecutionPlan {
   enabled: boolean;
+  scopeLabel?: string | null;
+  volumeTitle?: string | null;
+  preparedVolumeIds?: string[];
   firstChapterId?: string | null;
   startOrder?: number;
   endOrder?: number;
@@ -177,6 +195,13 @@ export interface DirectorCandidateBatch {
   createdAt: string;
 }
 
+export interface DirectorTaskSeedPayloadSnapshot {
+  idea?: string;
+  batches?: DirectorCandidateBatch[];
+  runMode?: DirectorRunMode;
+  autoExecutionPlan?: DirectorAutoExecutionPlan;
+}
+
 export interface DirectorLLMOptions {
   provider?: LLMProvider;
   model?: string;
@@ -212,6 +237,7 @@ export interface DirectorTakeoverReadinessResponse {
 export interface DirectorTakeoverRequest extends DirectorLLMOptions {
   novelId: string;
   startPhase: DirectorTakeoverStartPhase;
+  autoExecutionPlan?: DirectorAutoExecutionPlan;
 }
 
 export interface DirectorTakeoverResponse {
@@ -291,6 +317,7 @@ export interface DirectorConfirmRequest extends DirectorProjectContextInput, Dir
   round?: number;
   candidate: DirectorCandidate;
   workflowTaskId?: string;
+  autoExecutionPlan?: DirectorAutoExecutionPlan;
 }
 
 export interface DirectorPlanScene {
@@ -401,3 +428,38 @@ export interface DirectorConfirmApiResponse extends DirectorConfirmResponse {
 }
 
 export interface DirectorBookContractDraft extends BookContractDraft {}
+
+export function extractDirectorTaskSeedPayload(
+  seedPayload: unknown,
+): DirectorTaskSeedPayloadSnapshot | null {
+  if (!seedPayload || typeof seedPayload !== "object") {
+    return null;
+  }
+  return seedPayload as DirectorTaskSeedPayloadSnapshot;
+}
+
+export function extractDirectorTaskSeedPayloadFromMeta(
+  meta: Record<string, unknown> | null | undefined,
+): DirectorTaskSeedPayloadSnapshot | null {
+  if (!meta || typeof meta !== "object") {
+    return null;
+  }
+  return extractDirectorTaskSeedPayload((meta as { seedPayload?: unknown }).seedPayload);
+}
+
+export function mergeDirectorCandidateBatches(
+  currentBatches: DirectorCandidateBatch[],
+  incomingBatches: DirectorCandidateBatch[],
+): DirectorCandidateBatch[] {
+  if (incomingBatches.length === 0) {
+    return currentBatches;
+  }
+  if (currentBatches.length === 0) {
+    return incomingBatches;
+  }
+  const existingIds = new Set(currentBatches.map((batch) => batch.id));
+  const missingBatches = incomingBatches.filter((batch) => !existingIds.has(batch.id));
+  return missingBatches.length > 0
+    ? [...currentBatches, ...missingBatches]
+    : currentBatches;
+}

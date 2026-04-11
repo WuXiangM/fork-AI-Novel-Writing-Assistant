@@ -64,8 +64,11 @@ export function useNovelEditChapterRuntime({
       temperature: llm.temperature,
     }),
     onSuccess: async () => {
-      setChapterOperationMessage("章节计划已生成。");
-      await queryClient.invalidateQueries({ queryKey: queryKeys.novels.chapterPlan(novelId, selectedChapterId) });
+      setChapterOperationMessage("章节执行计划已生成，可直接开始写本章。");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.novels.chapterPlan(novelId, selectedChapterId) }),
+        invalidateNovelDetail(),
+      ]);
     },
   });
 
@@ -118,6 +121,7 @@ export function useNovelEditChapterRuntime({
     if (!selectedChapter) {
       return;
     }
+    setChapterOperationMessage("正在生成本章正文...");
     setActiveChapterStream({
       chapterId: selectedChapter.id,
       chapterLabel: `第${selectedChapter.order}章 ${selectedChapter.title || "未命名章节"}`,
@@ -145,6 +149,7 @@ export function useNovelEditChapterRuntime({
       setChapterOperationMessage("请先选择章节。");
       return;
     }
+    setChapterOperationMessage("正在生成修复稿...");
     setRepairBeforeContent(selectedChapter?.content ?? "");
     setRepairAfterContent("");
     setActiveRepairStream({

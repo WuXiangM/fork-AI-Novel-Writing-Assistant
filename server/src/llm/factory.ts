@@ -4,6 +4,13 @@ import { prisma } from "../db/prisma";
 import type { PromptInvocationMeta } from "../prompting/core/promptTypes";
 import { resolveModelTemperature } from "./capabilities";
 import { attachLLMDebugLogging } from "./debugLogging";
+import { resolveProviderReasoningBehavior } from "./reasoning";
+import {
+  resolveStructuredOutputProfile,
+  type StructuredExecutionMode,
+  type StructuredOutputProfile,
+  type StructuredOutputStrategy,
+} from "./structuredOutput";
 import { attachLLMUsageTracking } from "./usageTracking";
 import { resolveModel, type TaskType } from "./modelRouter";
 import {
@@ -21,6 +28,10 @@ interface LLMOptions {
   apiKey?: string;
   baseURL?: string;
   maxTokens?: number;
+  reasoningEnabled?: boolean;
+  executionMode?: StructuredExecutionMode;
+  structuredStrategy?: StructuredOutputStrategy;
+  modelKwargs?: Record<string, unknown>;
   fallbackProvider?: LLMProvider;
   taskType?: TaskType;
   promptMeta?: PromptInvocationMeta;
@@ -31,6 +42,7 @@ export interface ProviderSecret {
   model?: string;
   baseURL?: string;
   displayName?: string;
+  reasoningEnabled?: boolean;
 }
 
 export interface ResolvedLLMClientOptions {
@@ -41,11 +53,23 @@ export interface ResolvedLLMClientOptions {
   apiKey?: string;
   baseURL: string;
   maxTokens?: number;
+  reasoningEnabled: boolean;
+  modelKwargs?: Record<string, unknown>;
+  includeRawResponse: boolean;
+  executionMode: StructuredExecutionMode;
+  structuredProfile?: StructuredOutputProfile | null;
+  structuredStrategy?: StructuredOutputStrategy | null;
+  reasoningForcedOff: boolean;
   taskType?: TaskType;
   promptMeta?: PromptInvocationMeta;
 }
 
 const providerSecrets = new Map<LLMProvider, ProviderSecret>();
+const RESOLVED_LLM_OPTIONS = Symbol("RESOLVED_LLM_OPTIONS");
+
+type ChatOpenAIWithResolvedOptions = ChatOpenAI & {
+  [RESOLVED_LLM_OPTIONS]?: ResolvedLLMClientOptions;
+};
 
 function isMissingTableError(error: unknown): boolean {
   return (
@@ -70,6 +94,7 @@ function normalizeProviderSecret(secret: ProviderSecret): ProviderSecret {
     model: normalizeOptionalText(secret.model),
     baseURL: normalizeOptionalText(secret.baseURL),
     displayName: normalizeOptionalText(secret.displayName),
+    reasoningEnabled: secret.reasoningEnabled ?? true,
   };
 }
 
@@ -78,12 +103,14 @@ function toProviderSecret(item: {
   model?: string | null;
   baseURL?: string | null;
   displayName?: string | null;
+  reasoningEnabled?: boolean | null;
 }): ProviderSecret {
   return normalizeProviderSecret({
     key: item.key ?? undefined,
     model: item.model ?? undefined,
     baseURL: item.baseURL ?? undefined,
     displayName: item.displayName ?? undefined,
+    reasoningEnabled: item.reasoningEnabled ?? undefined,
   });
 }
 
@@ -198,6 +225,47 @@ export async function resolveLLMClientOptions(
   }
 
   const temperature = resolveModelTemperature(resolvedProvider, model, resolvedTemperature);
+  const executionMode = options.executionMode ?? "plain";
+  const structuredProfile = executionMode === "structured"
+    ? resolveStructuredOutputProfile({
+      provider: resolvedProvider,
+      model,
+      baseURL,
+      executionMode,
+    })
+    : null;
+  const usesNativeStructured = options.structuredStrategy != null && options.structuredStrategy !== "prompt_json";
+  const requestedReasoningEnabled = options.reasoningEnabled ?? dbSecret?.reasoningEnabled ?? true;
+  const shouldForceDisableReasoning = Boolean(
+    structuredProfile
+      && structuredProfile.requiresNonThinkingForStructured
+      && structuredProfile.supportsReasoningToggle,
+  );
+  const reasoningEnabled = shouldForceDisableReasoning ? false : requestedReasoningEnabled;
+  let effectiveMaxTokens = resolvedMaxTokens;
+  if (structuredProfile && usesNativeStructured && structuredProfile.omitMaxTokensForNativeStructured) {
+    effectiveMaxTokens = undefined;
+  } else if (
+    structuredProfile
+    && typeof structuredProfile.safeStructuredMaxTokens === "number"
+    && typeof effectiveMaxTokens === "number"
+  ) {
+    effectiveMaxTokens = Math.min(effectiveMaxTokens, structuredProfile.safeStructuredMaxTokens);
+  }
+  const baseModelKwargs: Record<string, unknown> = {
+    ...(options.modelKwargs ?? {}),
+    ...(shouldForceDisableReasoning ? { enable_thinking: false } : {}),
+  };
+  const reasoningBehavior = resolveProviderReasoningBehavior({
+    provider: resolvedProvider,
+    baseURL,
+    model,
+    reasoningEnabled,
+  });
+  const modelKwargs = {
+    ...(reasoningBehavior.modelKwargs ?? {}),
+    ...baseModelKwargs,
+  };
 
   return {
     provider: resolvedProvider,
@@ -206,27 +274,33 @@ export async function resolveLLMClientOptions(
     temperature,
     apiKey,
     baseURL,
-    maxTokens: resolvedMaxTokens,
+    maxTokens: effectiveMaxTokens,
+    reasoningEnabled: reasoningBehavior.reasoningEnabled,
+    modelKwargs: Object.keys(modelKwargs).length > 0 ? modelKwargs : undefined,
+    includeRawResponse: reasoningBehavior.includeRawResponse,
+    executionMode,
+    structuredProfile,
+    structuredStrategy: options.structuredStrategy ?? null,
+    reasoningForcedOff: shouldForceDisableReasoning && requestedReasoningEnabled,
     taskType: options.taskType,
     promptMeta: options.promptMeta,
   };
 }
 
-export async function getLLM(provider?: LLMProvider, options: LLMOptions = {}): Promise<ChatOpenAI> {
-  const resolved = await resolveLLMClientOptions(provider, options);
-
+export function createLLMFromResolvedOptions(resolved: ResolvedLLMClientOptions): ChatOpenAI {
   const llm = new ChatOpenAI({
     apiKey: resolved.apiKey ?? "ollama",
     model: resolved.model,
     modelName: resolved.model,
     temperature: resolved.temperature,
     maxTokens: resolved.maxTokens,
+    modelKwargs: resolved.modelKwargs,
+    __includeRawResponse: resolved.includeRawResponse,
     configuration: {
       baseURL: resolved.baseURL,
     },
   });
-
-  return attachLLMDebugLogging(attachLLMUsageTracking(llm), {
+  const decorated = attachLLMDebugLogging(attachLLMUsageTracking(llm), {
     provider: resolved.provider,
     model: resolved.model,
     temperature: resolved.temperature,
@@ -235,4 +309,15 @@ export async function getLLM(provider?: LLMProvider, options: LLMOptions = {}): 
     baseURL: resolved.baseURL,
     promptMeta: resolved.promptMeta,
   });
+  (decorated as ChatOpenAIWithResolvedOptions)[RESOLVED_LLM_OPTIONS] = resolved;
+  return decorated;
+}
+
+export async function getLLM(provider?: LLMProvider, options: LLMOptions = {}): Promise<ChatOpenAI> {
+  const resolved = await resolveLLMClientOptions(provider, options);
+  return createLLMFromResolvedOptions(resolved);
+}
+
+export function getResolvedLLMClientOptionsFromInstance(llm: ChatOpenAI): ResolvedLLMClientOptions | undefined {
+  return (llm as ChatOpenAIWithResolvedOptions)[RESOLVED_LLM_OPTIONS];
 }

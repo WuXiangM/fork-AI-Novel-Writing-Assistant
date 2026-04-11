@@ -33,6 +33,10 @@ export interface UnifiedTaskSummary {
   currentStage?: string | null;
   currentItemKey?: string | null;
   currentItemLabel?: string | null;
+  displayStatus?: string | null;
+  blockingReason?: string | null;
+  resumeAction?: string | null;
+  lastHealthyStage?: string | null;
   attemptCount: number;
   maxAttempts: number;
   lastError?: string | null;
@@ -46,6 +50,8 @@ export interface UnifiedTaskSummary {
   checkpointSummary?: string | null;
   resumeTarget?: NovelWorkflowResumeTarget | null;
   nextActionLabel?: string | null;
+  noticeCode?: string | null;
+  noticeSummary?: string | null;
   failureCode?: string | null;
   failureSummary?: string | null;
   recoveryHint?: string | null;

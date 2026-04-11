@@ -12,6 +12,7 @@ import {
   buildDirectorAutoExecutionCompletedSummary,
   buildDirectorAutoExecutionPausedLabel,
   buildDirectorAutoExecutionPausedSummary,
+  buildDirectorAutoExecutionScopeLabelFromState,
   buildDirectorAutoExecutionPipelineOptions,
   buildDirectorAutoExecutionState,
   resolveDirectorAutoExecutionRange,
@@ -41,7 +42,7 @@ interface NovelDirectorAutoExecutionWorkflowPort {
   }): Promise<unknown>;
   recordCheckpoint(taskId: string, input: {
     stage: "quality_repair";
-    checkpointType: "workflow_completed";
+    checkpointType: "workflow_completed" | "chapter_batch_ready";
     checkpointSummary: string;
     itemLabel: string;
     progress?: number;
@@ -75,12 +76,19 @@ interface NovelDirectorAutoExecutionNovelPort {
     qualityThreshold: number;
     repairMode: "light_repair";
   }): Promise<{ id: string; status: PipelineJobStatus }>;
+  findActivePipelineJobForRange(
+    novelId: string,
+    startOrder: number,
+    endOrder: number,
+    preferredJobId?: string | null,
+  ): Promise<{ id: string; status: PipelineJobStatus } | null>;
   getPipelineJobById(jobId: string): Promise<{
     id: string;
     status: PipelineJobStatus;
     progress: number;
     currentStage?: string | null;
     currentItemLabel?: string | null;
+    noticeSummary?: string | null;
     error?: string | null;
   } | null>;
   cancelPipelineJob(jobId: string): Promise<unknown>;
@@ -88,7 +96,10 @@ interface NovelDirectorAutoExecutionNovelPort {
 
 interface NovelDirectorAutoExecutionRuntimeDeps {
   novelContextService: Pick<NovelDirectorAutoExecutionNovelPort, "listChapters">;
-  novelService: Pick<NovelDirectorAutoExecutionNovelPort, "startPipelineJob" | "getPipelineJobById" | "cancelPipelineJob">;
+  novelService: Pick<
+    NovelDirectorAutoExecutionNovelPort,
+    "startPipelineJob" | "findActivePipelineJobForRange" | "getPipelineJobById" | "cancelPipelineJob"
+  >;
   workflowService: NovelDirectorAutoExecutionWorkflowPort;
   buildDirectorSeedPayload: (
     input: DirectorConfirmRequest,
@@ -117,13 +128,17 @@ export class NovelDirectorAutoExecutionRuntime {
     const range = resolveDirectorAutoExecutionRangeFromState(input.existingState)
       ?? resolveDirectorAutoExecutionRange(chapters);
     if (!range) {
-      throw new Error("当前还没有可自动执行的章节，请先完成前 10 章拆章同步。");
+      throw new Error("当前还没有可自动执行的章节，请先完成目标范围的拆章同步。");
     }
     return {
       range,
       autoExecution: buildDirectorAutoExecutionState({
         range,
         chapters,
+        plan: input.existingState,
+        scopeLabel: input.existingState?.scopeLabel ?? null,
+        volumeTitle: input.existingState?.volumeTitle ?? null,
+        preparedVolumeIds: input.existingState?.preparedVolumeIds ?? [],
         pipelineJobId: input.pipelineJobId ?? input.existingState?.pipelineJobId ?? null,
         pipelineStatus: input.pipelineStatus ?? input.existingState?.pipelineStatus ?? null,
       }),
@@ -193,9 +208,11 @@ export class NovelDirectorAutoExecutionRuntime {
       checkpointType: "workflow_completed",
       checkpointSummary: buildDirectorAutoExecutionCompletedSummary({
         title: input.request.candidate.workingTitle.trim() || input.request.title?.trim() || "当前项目",
-        totalChapterCount: input.range.totalChapterCount,
+        scopeLabel: buildDirectorAutoExecutionScopeLabelFromState(completedState, input.range.totalChapterCount),
       }),
-      itemLabel: buildDirectorAutoExecutionCompletedLabel(input.range.totalChapterCount),
+      itemLabel: buildDirectorAutoExecutionCompletedLabel(
+        buildDirectorAutoExecutionScopeLabelFromState(completedState, input.range.totalChapterCount),
+      ),
       progress: 1,
       chapterId: completedState.firstChapterId ?? input.range.firstChapterId,
       seedPayload: this.deps.buildDirectorSeedPayload(input.request, input.novelId, {
@@ -251,6 +268,30 @@ export class NovelDirectorAutoExecutionRuntime {
         }
       }
 
+      const activeRangeJob = await this.deps.novelService.findActivePipelineJobForRange(
+        input.novelId,
+        range.startOrder,
+        range.endOrder,
+        pipelineJobId || null,
+      );
+      if (activeRangeJob) {
+        pipelineJobId = activeRangeJob.id;
+        ({ range, autoExecution } = await this.resolveRangeAndState({
+          novelId: input.novelId,
+          existingState: autoExecution,
+          pipelineJobId,
+          pipelineStatus: activeRangeJob.status,
+        }));
+        await this.syncAutoExecutionTaskState({
+          taskId: input.taskId,
+          novelId: input.novelId,
+          request: input.request,
+          range,
+          autoExecution,
+          isBackgroundRunning: true,
+        });
+      }
+
       if (!pipelineJobId) {
         ({ range, autoExecution } = await this.resolveRangeAndState({
           novelId: input.novelId,
@@ -273,7 +314,7 @@ export class NovelDirectorAutoExecutionRuntime {
         await this.deps.workflowService.markTaskRunning(input.taskId, {
           stage: "chapter_execution",
           itemKey: "chapter_execution",
-          itemLabel: `正在自动执行前 ${range.totalChapterCount} 章`,
+          itemLabel: `正在自动执行${buildDirectorAutoExecutionScopeLabelFromState(autoExecution, range.totalChapterCount)}`,
           progress: 0.93,
           clearCheckpoint: input.resumeCheckpointType === "chapter_batch_ready",
         });
@@ -334,10 +375,10 @@ export class NovelDirectorAutoExecutionRuntime {
         }
         const job = await this.deps.novelService.getPipelineJobById(pipelineJobId);
         if (!job) {
-          throw new Error("自动执行前 10 章时未能找到对应的批量任务。");
+          throw new Error("自动执行章节批次时未能找到对应的批量任务。");
         }
         if (job.status === "queued" || job.status === "running") {
-          const runningState = resolveDirectorAutoExecutionWorkflowState(job, range);
+          const runningState = resolveDirectorAutoExecutionWorkflowState(job, range, autoExecution);
           await this.deps.workflowService.markTaskRunning(input.taskId, {
             ...runningState,
             clearCheckpoint: input.resumeCheckpointType === "chapter_batch_ready",
@@ -368,6 +409,56 @@ export class NovelDirectorAutoExecutionRuntime {
           pipelineStatus: job.status,
         }));
 
+        if (job.status === "succeeded" && job.noticeSummary?.trim()) {
+          const scopeLabel = buildDirectorAutoExecutionScopeLabelFromState(autoExecution, range.totalChapterCount);
+          const pauseMessage = job.noticeSummary.trim();
+          await this.deps.workflowService.recordCheckpoint(input.taskId, {
+            stage: "quality_repair",
+            checkpointType: "chapter_batch_ready",
+            itemLabel: buildDirectorAutoExecutionPausedLabel(autoExecution),
+            checkpointSummary: buildDirectorAutoExecutionPausedSummary({
+              scopeLabel,
+              remainingChapterCount: autoExecution.remainingChapterCount ?? 0,
+              nextChapterOrder: autoExecution.nextChapterOrder ?? null,
+              failureMessage: pauseMessage,
+            }),
+            chapterId: autoExecution.nextChapterId ?? range.firstChapterId,
+            progress: 0.98,
+            seedPayload: this.deps.buildDirectorSeedPayload(input.request, input.novelId, {
+              directorSession: buildDirectorSessionState({
+                runMode: input.request.runMode,
+                phase: "front10_ready",
+                isBackgroundRunning: false,
+              }),
+              resumeTarget: buildNovelEditResumeTarget({
+                novelId: input.novelId,
+                taskId: input.taskId,
+                stage: "pipeline",
+                chapterId: autoExecution.nextChapterId ?? range.firstChapterId,
+              }),
+              autoExecution: {
+                ...autoExecution,
+                pipelineJobId,
+                pipelineStatus: job.status,
+              },
+            }),
+          });
+          await this.syncAutoExecutionTaskState({
+            taskId: input.taskId,
+            novelId: input.novelId,
+            request: input.request,
+            range,
+            autoExecution: {
+              ...autoExecution,
+              pipelineJobId,
+              pipelineStatus: job.status,
+            },
+            isBackgroundRunning: false,
+            resumeStage: "pipeline",
+          });
+          return;
+        }
+
         if (job.status === "succeeded" || (autoExecution.remainingChapterCount ?? 0) === 0) {
           await this.recordCompletedCheckpoint({
             taskId: input.taskId,
@@ -381,17 +472,18 @@ export class NovelDirectorAutoExecutionRuntime {
           return;
         }
 
+        const scopeLabel = buildDirectorAutoExecutionScopeLabelFromState(autoExecution, range.totalChapterCount);
         const failureMessage = job.error?.trim()
           || (job.status === "cancelled"
-            ? "前 10 章自动执行已取消。"
-            : "前 10 章自动执行未能全部通过质量要求。");
+            ? `${scopeLabel}自动执行已取消。`
+            : `${scopeLabel}自动执行未能全部通过质量要求。`);
         await this.deps.workflowService.markTaskFailed(input.taskId, failureMessage, {
           stage: "quality_repair",
           itemKey: "quality_repair",
           itemLabel: buildDirectorAutoExecutionPausedLabel(autoExecution),
           checkpointType: "chapter_batch_ready",
           checkpointSummary: buildDirectorAutoExecutionPausedSummary({
-            totalChapterCount: range.totalChapterCount,
+            scopeLabel,
             remainingChapterCount: autoExecution.remainingChapterCount ?? 0,
             nextChapterOrder: autoExecution.nextChapterOrder ?? null,
             failureMessage,

@@ -14,9 +14,11 @@ import {
   canContinueDirector,
   canContinueFront10AutoExecution,
   canEnterChapterExecution,
+  getCandidateSelectionLink,
   getTaskCenterLink,
   getWorkflowBadge,
   getWorkflowDescription,
+  requiresCandidateSelection,
 } from "@/lib/novelWorkflowTaskUi";
 import { toast } from "@/components/ui/toast";
 
@@ -82,7 +84,11 @@ export default function NovelList() {
   });
 
   const downloadNovelMutation = useMutation({
-    mutationFn: (novelId: string) => downloadNovelExport(novelId, "txt"),
+    mutationFn: (input: { novelId: string; novelTitle: string }) => downloadNovelExport(
+      input.novelId,
+      "txt",
+      input.novelTitle,
+    ),
     onSuccess: ({ blob, fileName }) => {
       createDownload(blob, fileName);
       toast.success("导出已开始。");
@@ -264,7 +270,7 @@ export default function NovelList() {
             const isWorkflowPending = continueWorkflowMutation.isPending
               && continueWorkflowMutation.variables?.taskId === workflowTask?.id;
             const isDownloadPending = downloadNovelMutation.isPending
-              && downloadNovelMutation.variables === novel.id;
+              && downloadNovelMutation.variables?.novelId === novel.id;
             const isDeletePending = deleteNovelMutation.isPending
               && deleteNovelMutation.variables === novel.id;
 
@@ -326,6 +332,16 @@ export default function NovelList() {
                       <div className="mt-2 text-xs text-muted-foreground">
                         当前阶段：{workflowTask.currentStage ?? "自动导演"}{workflowTask.currentItemLabel ? ` · ${workflowTask.currentItemLabel}` : ""}
                       </div>
+                      {workflowTask.lastHealthyStage ? (
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          最近健康阶段：{workflowTask.lastHealthyStage}
+                        </div>
+                      ) : null}
+                      {workflowTask.resumeAction ? (
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          建议继续：{workflowTask.resumeAction}
+                        </div>
+                      ) : null}
                     </div>
                   ) : (
                     <div className="rounded-xl border border-dashed bg-muted/10 p-3 text-xs text-muted-foreground">
@@ -362,7 +378,7 @@ export default function NovelList() {
                         }}
                         disabled={isWorkflowPending}
                       >
-                        {isWorkflowPending ? "继续执行中..." : "继续自动执行前 10 章"}
+                        {isWorkflowPending ? "继续执行中..." : (workflowTask?.resumeAction ?? "继续自动执行前 10 章")}
                       </Button>
                     ) : canContinueDirector(workflowTask) ? (
                       <Button
@@ -378,7 +394,13 @@ export default function NovelList() {
                         }}
                         disabled={isWorkflowPending}
                       >
-                        {isWorkflowPending ? "继续中..." : "继续导演"}
+                        {isWorkflowPending ? "继续中..." : (workflowTask?.resumeAction ?? "继续导演")}
+                      </Button>
+                    ) : requiresCandidateSelection(workflowTask) ? (
+                      <Button asChild size="sm">
+                        <Link to={getCandidateSelectionLink(workflowTask!.id)} onClick={stopCardClick}>
+                          {workflowTask!.resumeAction ?? "继续确认书级方向"}
+                        </Link>
                       </Button>
                     ) : canEnterChapterExecution(workflowTask) ? (
                       <Button asChild size="sm">
@@ -401,7 +423,10 @@ export default function NovelList() {
                       variant="outline"
                       onClick={(event) => {
                         stopCardClick(event);
-                        downloadNovelMutation.mutate(novel.id);
+                        downloadNovelMutation.mutate({
+                          novelId: novel.id,
+                          novelTitle: novel.title,
+                        });
                       }}
                       disabled={isDownloadPending}
                     >

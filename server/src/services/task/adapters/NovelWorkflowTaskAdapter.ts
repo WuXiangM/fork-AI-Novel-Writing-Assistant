@@ -2,17 +2,21 @@ import type {
   NovelWorkflowCheckpoint,
 } from "@ai-novel/shared/types/novelWorkflow";
 import type { DirectorLLMOptions } from "@ai-novel/shared/types/novelDirector";
+import type { ResourceRef } from "@ai-novel/shared/types/agent";
 import type { TaskStatus, UnifiedTaskDetail, UnifiedTaskSummary } from "@ai-novel/shared/types/task";
 import { prisma } from "../../../db/prisma";
 import { AppError } from "../../../middleware/errorHandler";
 import { NovelDirectorService } from "../../novel/director/NovelDirectorService";
 import { NovelWorkflowService } from "../../novel/workflow/NovelWorkflowService";
 import {
-  getDirectorInputFromSeedPayload,
+  getDirectorLlmOptionsFromSeedPayload,
   type DirectorWorkflowSeedPayload,
 } from "../../novel/director/novelDirectorHelpers";
+import { isAutoDirectorRecoveryInProgress } from "../../novel/workflow/novelWorkflowRecoveryHeuristics";
 import {
+  buildNovelCreateResumeTarget,
   parseMilestones,
+  parseSeedPayload,
   parseResumeTarget,
   resumeTargetToRoute,
 } from "../../novel/workflow/novelWorkflow.shared";
@@ -28,6 +32,7 @@ import {
   isTaskArchived,
 } from "../taskArchive";
 import { buildNovelWorkflowDetailSteps } from "../novelWorkflowDetailSteps";
+import { buildWorkflowExplainability } from "../novelWorkflowExplainability";
 import { buildNovelWorkflowNextActionLabel } from "../novelWorkflowTaskSummary";
 
 function buildOwnerLabel(row: {
@@ -35,6 +40,57 @@ function buildOwnerLabel(row: {
   title: string;
 }): string {
   return row.novel?.title?.trim() || row.title.trim() || "小说主任务";
+}
+
+function parseLinkedPipelineJobId(seedPayloadJson?: string | null): string | null {
+  if (!seedPayloadJson?.trim()) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(seedPayloadJson) as {
+      autoExecution?: {
+        pipelineJobId?: unknown;
+      };
+    };
+    return typeof parsed.autoExecution?.pipelineJobId === "string"
+      && parsed.autoExecution.pipelineJobId.trim()
+      ? parsed.autoExecution.pipelineJobId.trim()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasCandidateSelectionPhase(seedPayloadJson?: string | null): boolean {
+  const seedPayload = parseSeedPayload<DirectorWorkflowSeedPayload>(seedPayloadJson);
+  if (!seedPayload) {
+    return false;
+  }
+  if (seedPayload.candidateStage) {
+    return true;
+  }
+  const phase = seedPayload.directorSession && typeof seedPayload.directorSession === "object"
+    ? (seedPayload.directorSession as { phase?: unknown }).phase
+    : null;
+  return phase === "candidate_selection";
+}
+
+export function normalizeWorkflowResumeTargetForCandidateSelection(input: {
+  id: string;
+  checkpointType: string | null;
+  currentItemKey: string | null;
+  resumeTargetJson: string | null;
+  seedPayloadJson?: string | null;
+}) {
+  const parsed = parseResumeTarget(input.resumeTargetJson);
+  const isCandidateSelectionTask = input.checkpointType === "candidate_selection_required"
+    || input.currentItemKey === "auto_director"
+    || input.currentItemKey?.startsWith("candidate_") === true
+    || hasCandidateSelectionPhase(input.seedPayloadJson);
+  if (!isCandidateSelectionTask) {
+    return parsed;
+  }
+  return buildNovelCreateResumeTarget(input.id, "director");
 }
 
 function mapSummary(row: {
@@ -62,23 +118,62 @@ function mapSummary(row: {
   lastTokenRecordedAt: Date | null;
   novelId: string | null;
   novel?: { title: string } | null;
+  seedPayloadJson?: string | null;
 }): UnifiedTaskSummary {
-  const resumeTarget = parseResumeTarget(row.resumeTargetJson);
+  const status = row.status as TaskStatus;
+  const isRecoveryInProgress = isAutoDirectorRecoveryInProgress({
+    status,
+    lastError: row.lastError,
+  });
+  const lastError = isRecoveryInProgress ? null : row.lastError;
+  const resumeTarget = normalizeWorkflowResumeTargetForCandidateSelection({
+    id: row.id,
+    checkpointType: row.checkpointType,
+    currentItemKey: row.currentItemKey,
+    resumeTargetJson: row.resumeTargetJson,
+    seedPayloadJson: row.seedPayloadJson,
+  });
   const sourceRoute = resumeTargetToRoute(resumeTarget);
   const ownerLabel = buildOwnerLabel(row);
   const checkpointType = row.checkpointType as NovelWorkflowCheckpoint | null;
+  const linkedPipelineJobId = parseLinkedPipelineJobId(row.seedPayloadJson);
+  const targetResources: ResourceRef[] = [{
+    type: "task",
+    id: row.id,
+    label: row.title,
+    route: sourceRoute,
+  }];
+  if (linkedPipelineJobId && row.novelId) {
+    targetResources.push({
+      type: "generation_job" as const,
+      id: linkedPipelineJobId,
+      label: "章节流水线",
+      route: `/novels/${row.novelId}/edit`,
+    });
+  }
+  const explainability = buildWorkflowExplainability({
+    status,
+    currentStage: row.currentStage,
+    currentItemKey: row.currentItemKey,
+    checkpointType,
+    lastError: row.lastError,
+  });
   return {
     id: row.id,
     kind: "novel_workflow",
     title: row.title,
-    status: row.status as TaskStatus,
+    status,
     progress: row.progress,
     currentStage: row.currentStage,
     currentItemKey: row.currentItemKey,
     currentItemLabel: row.currentItemLabel,
+    displayStatus: explainability.displayStatus,
+    blockingReason: explainability.blockingReason,
+    resumeAction: explainability.resumeAction,
+    lastHealthyStage: explainability.lastHealthyStage,
     attemptCount: row.attemptCount,
     maxAttempts: row.maxAttempts,
-    lastError: row.lastError,
+    lastError,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     heartbeatAt: row.heartbeatAt?.toISOString() ?? null,
@@ -88,12 +183,12 @@ function mapSummary(row: {
     checkpointType,
     checkpointSummary: row.checkpointSummary,
     resumeTarget,
-    nextActionLabel: buildNovelWorkflowNextActionLabel(row.status as TaskStatus, checkpointType),
-    failureCode: row.status === "failed" ? "NOVEL_WORKFLOW_FAILED" : null,
-    failureSummary: row.status === "failed"
-      ? normalizeFailureSummary(row.lastError, "小说主流程中断，但没有记录明确错误。")
-      : row.lastError,
-    recoveryHint: buildTaskRecoveryHint("novel_workflow", row.status as TaskStatus),
+    nextActionLabel: buildNovelWorkflowNextActionLabel(status, checkpointType),
+    failureCode: status === "failed" ? "NOVEL_WORKFLOW_FAILED" : null,
+    failureSummary: status === "failed"
+      ? normalizeFailureSummary(lastError, "小说主流程中断，但没有记录明确错误。")
+      : null,
+    recoveryHint: buildTaskRecoveryHint("novel_workflow", status),
     tokenUsage: toTaskTokenUsageSummary({
       promptTokens: row.promptTokens,
       completionTokens: row.completionTokens,
@@ -114,12 +209,7 @@ function mapSummary(row: {
         label: row.title,
         route: sourceRoute,
       },
-    targetResources: [{
-      type: "task",
-      id: row.id,
-      label: row.title,
-      route: sourceRoute,
-    }],
+    targetResources,
   };
 }
 
@@ -142,6 +232,7 @@ export class NovelWorkflowTaskAdapter {
             },
           }
           : {}),
+        lane: "auto_director",
         ...(input.status ? { status: input.status } : {}),
         ...(input.keyword
           ? {
@@ -176,6 +267,7 @@ export class NovelWorkflowTaskAdapter {
               },
             }
             : {}),
+          lane: "auto_director",
           ...(input.status ? { status: input.status } : {}),
           ...(input.keyword
             ? {
@@ -199,7 +291,19 @@ export class NovelWorkflowTaskAdapter {
       })
       : rows;
 
-    return normalizedRows.map((row) => mapSummary(row));
+    const visibleRows = normalizedRows.filter((row) => {
+      if (row.lane !== "manual_create" || !row.novelId) {
+        return true;
+      }
+      return !normalizedRows.some((candidate) =>
+        candidate.id !== row.id
+        && candidate.novelId === row.novelId
+        && candidate.lane === "auto_director"
+        && ["queued", "running", "waiting_approval", "succeeded"].includes(candidate.status)
+        && candidate.updatedAt >= row.updatedAt);
+    });
+
+    return visibleRows.map((row) => mapSummary(row));
   }
 
   async detail(id: string): Promise<UnifiedTaskDetail | null> {
@@ -223,7 +327,13 @@ export class NovelWorkflowTaskAdapter {
     }
 
     const summary = mapSummary(row);
-    const resumeTarget = parseResumeTarget(row.resumeTargetJson);
+    const resumeTarget = normalizeWorkflowResumeTargetForCandidateSelection({
+      id: row.id,
+      checkpointType: row.checkpointType,
+      currentItemKey: row.currentItemKey,
+      resumeTargetJson: row.resumeTargetJson,
+      seedPayloadJson: row.seedPayloadJson,
+    });
     const milestones = parseMilestones(row.milestonesJson);
     let seedPayload: Record<string, unknown> | null = null;
     if (row.seedPayloadJson?.trim()) {
@@ -239,12 +349,12 @@ export class NovelWorkflowTaskAdapter {
     const directorSession = workflowSeedPayload && typeof workflowSeedPayload.directorSession === "object"
       ? workflowSeedPayload.directorSession
       : null;
-    const directorInput = getDirectorInputFromSeedPayload(workflowSeedPayload);
+    const boundLlm = getDirectorLlmOptionsFromSeedPayload(workflowSeedPayload);
 
     return {
       ...summary,
-      provider: directorInput?.provider ?? null,
-      model: directorInput?.model ?? null,
+      provider: boundLlm?.provider ?? null,
+      model: boundLlm?.model ?? null,
       startedAt: row.startedAt?.toISOString() ?? null,
       finishedAt: row.finishedAt?.toISOString() ?? null,
       retryCountLabel: `${row.attemptCount}/${row.maxAttempts}`,
@@ -254,11 +364,11 @@ export class NovelWorkflowTaskAdapter {
         checkpointSummary: row.checkpointSummary,
         resumeTarget,
         directorSession,
-        llm: directorInput
+        llm: boundLlm
           ? {
-            provider: directorInput.provider ?? null,
-            model: directorInput.model ?? null,
-            temperature: directorInput.temperature ?? null,
+            provider: boundLlm.provider ?? null,
+            model: boundLlm.model ?? null,
+            temperature: boundLlm.temperature ?? null,
           }
           : null,
         seedPayload,

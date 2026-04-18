@@ -12,6 +12,7 @@ import {
   type AssetTabKey,
   type QueueFilterKey,
 } from "./chapterExecution.shared";
+import DirectorTakeoverEntryPanel from "./DirectorTakeoverEntryPanel";
 
 export default function ChapterManagementTab(props: ChapterTabViewProps) {
   const {
@@ -49,6 +50,12 @@ export default function ChapterManagementTab(props: ChapterTabViewProps) {
     onUnifyStyle,
     onAddDialogue,
     onAddDescription,
+    isGeneratingTaskSheet,
+    isGeneratingSceneCards,
+    isSummarizingChapter,
+    reviewActionKind,
+    repairActionKind,
+    generationActionKind,
     isReviewingChapter,
     isRepairingChapter,
     reviewResult,
@@ -56,11 +63,14 @@ export default function ChapterManagementTab(props: ChapterTabViewProps) {
     lastReplanResult,
     chapterPlan,
     latestStateSnapshot,
+    chapterStateSnapshot,
     chapterAuditReports,
+    backgroundSyncActivities,
     isGeneratingChapterPlan,
     isReplanningChapter,
     isRunningFullAudit,
     chapterQualityReport,
+    chapterRuntimePackage,
     repairStreamContent,
     isRepairStreaming,
     repairStreamingChapterId,
@@ -73,6 +83,7 @@ export default function ChapterManagementTab(props: ChapterTabViewProps) {
     streamingChapterLabel,
     chapterRunStatus,
     onAbortStream,
+    directorTakeoverEntry,
   } = props;
 
   const [assetTab, setAssetTab] = useState<AssetTabKey>("content");
@@ -110,7 +121,13 @@ export default function ChapterManagementTab(props: ChapterTabViewProps) {
   );
 
   return (
-    <Card className="overflow-hidden">
+    <div className="space-y-4">
+      <DirectorTakeoverEntryPanel
+        title="从章节执行接管"
+        description="AI 会先判断当前是否有活动批次、检查点或可执行章节范围，再决定恢复当前批次还是按你的选择新开批次。"
+        entry={directorTakeoverEntry}
+      />
+      <Card className="overflow-hidden">
       <CardHeader className="gap-3 border-b bg-gradient-to-b from-muted/25 via-background to-background">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
           <div className="space-y-1">
@@ -170,6 +187,7 @@ export default function ChapterManagementTab(props: ChapterTabViewProps) {
               isReplanningChapter={isReplanningChapter}
               lastReplanResult={lastReplanResult}
               chapterQualityReport={chapterQualityReport}
+              chapterRuntimePackage={chapterRuntimePackage}
               reviewResult={reviewResult}
               openAuditIssues={openAuditIssues}
               streamContent={streamContent}
@@ -178,6 +196,8 @@ export default function ChapterManagementTab(props: ChapterTabViewProps) {
               streamingChapterLabel={streamingChapterLabel}
               chapterRunStatus={chapterRunStatus}
               onAbortStream={onAbortStream}
+              onRunFullAudit={onRunFullAudit}
+              isRunningFullAudit={isRunningFullAudit}
               repairStreamContent={repairStreamContent}
               isRepairStreaming={isRepairStreaming}
               repairStreamingChapterId={repairStreamingChapterId}
@@ -215,15 +235,32 @@ export default function ChapterManagementTab(props: ChapterTabViewProps) {
               onUnifyStyle={onUnifyStyle}
               onAddDialogue={onAddDialogue}
               onAddDescription={onAddDescription}
+              isGeneratingTaskSheet={isGeneratingTaskSheet}
+              isGeneratingSceneCards={isGeneratingSceneCards}
+              isSummarizingChapter={isSummarizingChapter}
+              reviewActionKind={reviewActionKind}
+              repairActionKind={repairActionKind}
+              generationActionKind={generationActionKind}
               isReviewingChapter={isReviewingChapter}
               isRepairingChapter={isRepairingChapter}
               isGeneratingChapterPlan={isGeneratingChapterPlan}
               isReplanningChapter={isReplanningChapter}
               isRunningFullAudit={isRunningFullAudit}
+              isStreaming={isStreaming}
+              streamingChapterId={streamingChapterId}
+              chapterAuditReports={chapterAuditReports}
+              chapterRuntimePackage={chapterRuntimePackage}
+              latestStateSnapshot={latestStateSnapshot}
+              chapterStateSnapshot={chapterStateSnapshot}
+              backgroundSyncActivities={backgroundSyncActivities}
+              chapterRunStatus={chapterRunStatus}
+              repairRunStatus={repairRunStatus}
+              repairStreamingChapterId={repairStreamingChapterId}
             />
           </div>
         </div>
       </CardContent>
-    </Card>
+      </Card>
+    </div>
   );
 }

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  DirectorAutoExecutionPlan,
   DirectorAutoExecutionState,
   BookSpec,
   DirectorCandidate,
@@ -12,6 +13,7 @@ import type {
   DirectorProjectContextInput,
   DirectorRunMode,
   DirectorSessionState,
+  DirectorTaskNotice,
 } from "@ai-novel/shared/types/novelDirector";
 import { DIRECTOR_CORRECTION_PRESETS } from "@ai-novel/shared/types/novelDirector";
 import type { BookContractDraft } from "@ai-novel/shared/types/novelWorkflow";
@@ -45,6 +47,8 @@ export interface DirectorWorkflowSeedPayload extends Record<string, unknown> {
   provider?: DirectorLLMOptions["provider"] | null;
   model?: string | null;
   temperature?: number | null;
+  runMode?: DirectorRunMode;
+  autoExecutionPlan?: DirectorAutoExecutionPlan;
   batches?: DirectorCandidateBatch[];
   candidateStage?: DirectorCandidateStageState | null;
   candidate?: DirectorCandidate;
@@ -56,6 +60,7 @@ export interface DirectorWorkflowSeedPayload extends Record<string, unknown> {
   directorSession?: DirectorSessionState;
   resumeTarget?: NovelWorkflowResumeTarget | null;
   autoExecution?: DirectorAutoExecutionState;
+  taskNotice?: DirectorTaskNotice | null;
 }
 
 export interface CandidateGenerationContext {

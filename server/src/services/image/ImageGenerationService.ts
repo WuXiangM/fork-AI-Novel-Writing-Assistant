@@ -39,7 +39,9 @@ export class ImageGenerationService {
     }
 
     const model = resolveImageModel(provider, input.model);
-    const prompt = buildCharacterPrompt(input.prompt, input.stylePreset, character);
+    const prompt = input.promptMode === "direct"
+      ? input.prompt.trim()
+      : buildCharacterPrompt(input.prompt, input.stylePreset, character);
     const task = await prisma.imageGenerationTask.create({
       data: {
         sceneType: "character",
@@ -85,6 +87,7 @@ export class ImageGenerationService {
       where: { id: taskId },
       data: {
         status: "queued",
+        pendingManualRecovery: false,
         progress: 0,
         retryCount: 0,
         error: null,
@@ -202,10 +205,13 @@ export class ImageGenerationService {
     };
   }
 
-  async resumePendingTasks(): Promise<void> {
+  async markPendingTasksForManualRecovery(): Promise<void> {
     try {
       const rows = await prisma.imageGenerationTask.findMany({
-        where: { status: { in: ["queued", "running"] } },
+        where: {
+          status: { in: ["queued", "running"] },
+          pendingManualRecovery: false,
+        },
         select: { id: true, status: true },
         orderBy: { createdAt: "asc" },
       });
@@ -218,7 +224,8 @@ export class ImageGenerationService {
           where: { id: { in: runningIds } },
           data: {
             status: "queued",
-            error: "Task interrupted by server restart and requeued.",
+            pendingManualRecovery: true,
+            error: "服务重启后任务已暂停，等待手动恢复。",
             heartbeatAt: null,
             currentStage: "queued",
             currentItemKey: null,
@@ -227,7 +234,18 @@ export class ImageGenerationService {
           },
         });
       }
-      rows.forEach((item) => this.enqueueTask(item.id));
+      const queuedIds = rows.filter((item) => item.status === "queued").map((item) => item.id);
+      if (queuedIds.length > 0) {
+        await prisma.imageGenerationTask.updateMany({
+          where: { id: { in: queuedIds } },
+          data: {
+            pendingManualRecovery: true,
+            error: "服务重启后任务已暂停，等待手动恢复。",
+            heartbeatAt: null,
+            cancelRequestedAt: null,
+          },
+        });
+      }
     } catch (error) {
       if (isMissingTableError(error)) {
         return;
@@ -272,7 +290,7 @@ export class ImageGenerationService {
     if (!task) {
       return;
     }
-    if (task.status !== "queued" && task.status !== "running") {
+    if ((task.status !== "queued" && task.status !== "running") || task.pendingManualRecovery) {
       return;
     }
     if (task.cancelRequestedAt) {
@@ -300,6 +318,7 @@ export class ImageGenerationService {
       where: { id: task.id },
       data: {
         status: "running",
+        pendingManualRecovery: false,
         progress: 0.1,
         error: null,
         startedAt: task.startedAt ?? new Date(),
@@ -342,6 +361,25 @@ export class ImageGenerationService {
         },
       });
 
+      const persistedImages: Array<{
+        image: (typeof result.images)[number];
+        persisted: Awaited<ReturnType<typeof persistGeneratedImageAsset>>;
+      }> = [];
+      for (let index = 0; index < result.images.length; index += 1) {
+        await this.ensureNotCancelled(task.id);
+        const image = result.images[index];
+        const persisted = await persistGeneratedImageAsset({
+          taskId: task.id,
+          sceneType: "character",
+          baseCharacterId: task.baseCharacterId,
+          sortOrder: index,
+          url: image.url,
+          mimeType: image.mimeType ?? null,
+        });
+        persistedImages.push({ image, persisted });
+      }
+
+      await this.ensureNotCancelled(task.id);
       await prisma.$transaction(async (tx) => {
         const hasPrimary = await tx.imageAsset.findFirst({
           where: {
@@ -351,16 +389,8 @@ export class ImageGenerationService {
           },
           select: { id: true },
         });
-        for (let index = 0; index < result.images.length; index += 1) {
-          const image = result.images[index];
-          const persisted = await persistGeneratedImageAsset({
-            taskId: task.id,
-            sceneType: "character",
-            baseCharacterId: task.baseCharacterId,
-            sortOrder: index,
-            url: image.url,
-            mimeType: image.mimeType ?? null,
-          });
+        for (let index = 0; index < persistedImages.length; index += 1) {
+          const { image, persisted } = persistedImages[index];
           await tx.imageAsset.create({
             data: {
               taskId: task.id,
@@ -412,6 +442,7 @@ export class ImageGenerationService {
           where: { id: task.id },
           data: {
             status: "queued",
+            pendingManualRecovery: false,
             progress: 0,
             retryCount: { increment: 1 },
             error: errorMessage,
@@ -470,6 +501,33 @@ export class ImageGenerationService {
         finishedAt: new Date(),
       },
     });
+  }
+
+  async resumeTask(taskId: string): Promise<ImageGenerationTask> {
+    const task = await prisma.imageGenerationTask.findUnique({
+      where: { id: taskId },
+      select: {
+        status: true,
+      },
+    });
+    if (!task) {
+      throw new AppError("Image task not found.", 404);
+    }
+    if (task.status !== "queued" && task.status !== "running") {
+      throw new AppError("Only queued or running image tasks can be resumed.", 400);
+    }
+
+    await prisma.imageGenerationTask.update({
+      where: { id: taskId },
+      data: {
+        status: "queued",
+        pendingManualRecovery: false,
+        heartbeatAt: null,
+        cancelRequestedAt: null,
+      },
+    });
+    this.enqueueTask(taskId);
+    return this.getTask(taskId);
   }
 }
 

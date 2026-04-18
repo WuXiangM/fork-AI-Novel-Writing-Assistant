@@ -20,6 +20,50 @@ function createContextPackage() {
       content: null,
       expectation: "完成第一次明确反压",
       targetWordCount: 3000,
+      sceneCards: JSON.stringify({
+        targetWordCount: 3000,
+        lengthBudget: {
+          targetWordCount: 3000,
+          softMinWordCount: 2550,
+          softMaxWordCount: 3450,
+          hardMaxWordCount: 3750,
+        },
+        scenes: [
+          {
+            key: "scene_1",
+            title: "接住情报",
+            purpose: "让女二带来的情报成为反压支点。",
+            mustAdvance: ["情报到手"],
+            mustPreserve: ["压迫感"],
+            entryState: "主角暂时被压制。",
+            exitState: "主角确认反压入口。",
+            forbiddenExpansion: ["不要提前揭露幕后黑手"],
+            targetWordCount: 900,
+          },
+          {
+            key: "scene_2",
+            title: "第一次反压",
+            purpose: "把情报转成可见收益。",
+            mustAdvance: ["第一次反压兑现"],
+            mustPreserve: ["资源差距还在"],
+            entryState: "主角拿到情报准备落子。",
+            exitState: "敌方被迫应对。",
+            forbiddenExpansion: ["不要直接大决战"],
+            targetWordCount: 1200,
+          },
+          {
+            key: "scene_3",
+            title: "尾段钩子",
+            purpose: "抛出更大威胁，拉向下一章。",
+            mustAdvance: ["新的威胁出现"],
+            mustPreserve: ["本章反压收益有效"],
+            entryState: "主角刚拿到阶段性主动权。",
+            exitState: "读者知道下一章压力更高。",
+            forbiddenExpansion: ["不要展开下章战斗"],
+            targetWordCount: 900,
+          },
+        ],
+      }),
       supportingContextText: "",
     },
     plan: {
@@ -42,6 +86,18 @@ function createContextPackage() {
       createdAt: now,
       updatedAt: now,
     },
+    nextAction: "write_chapter",
+    chapterStateGoal: {
+      chapterId: "chapter-5",
+      chapterOrder: 5,
+      summary: "Push the counterattack into a visible gain.",
+      targetConflicts: ["The first counterattack must land."],
+      targetRelationships: ["Protagonist: tentative alliance"],
+      targetPayoffs: ["First payoff after securing the key intel."],
+      protectedSecrets: ["Hidden mastermind identity"],
+    },
+    protectedSecrets: ["Hidden mastermind identity"],
+    pendingReviewProposalCount: 0,
     stateSnapshot: {
       id: "snapshot-4",
       novelId: "novel-1",
@@ -377,6 +433,11 @@ test("chapter layered contexts carry volume mission, character duties and repair
   assert.ok(writeContext.openConflictSummaries.some((item) => item.includes("第一次反压仍未落地")));
   assert.equal(writeContext.ledgerSummary.overdueCount, 1);
   assert.equal(writeContext.chapterMission.targetWordCount, 3000);
+  assert.equal(writeContext.nextAction, "write_chapter");
+  assert.equal(writeContext.lengthBudget.targetWordCount, 3000);
+  assert.equal(writeContext.scenePlan.scenes.length, 3);
+  assert.equal(writeContext.scenePlan.scenes[1].title, "第一次反压");
+  assert.ok(writeContext.chapterStateGoal.summary.includes("visible gain"));
   assert.ok(reviewContext.structureObligations.includes("volume mission: 建立压迫源并完成第一次反压"));
   assert.ok(reviewContext.structureObligations.some((item) => item.includes("pending payoff: 女二情报钥匙")));
   assert.ok(reviewContext.structureObligations.some((item) => item.includes("urgent payoff: 黑市账户异常")));
@@ -390,6 +451,11 @@ test("chapter layered contexts carry volume mission, character duties and repair
   const reviewBlocks = buildChapterReviewContextBlocks(reviewContext);
   const repairBlocks = buildChapterRepairContextBlocks(repairContext);
 
+  assert.ok(writerBlocks.some((block) => (
+    block.id === "scene_plan"
+    && /Scene count: 3/.test(block.content)
+    && /第一次反压 \[1200\]/.test(block.content)
+  )));
   assert.ok(writerBlocks.some((block) => (
     block.id === "payoff_ledger"
     && /Payoff ledger summary: pending=1, urgent=1, overdue=1, paid_off=0/.test(block.content)
@@ -409,8 +475,14 @@ test("chapter layered contexts carry volume mission, character duties and repair
   assert.ok(reviewBlocks.some((block) => (
     block.id === "chapter_mission"
     && /Target length: around 3000 Chinese characters/.test(block.content)
+    && /State-driven next action: write_chapter/.test(block.content)
     && /2550-3450/.test(block.content)
+  )));
+  assert.ok(writerBlocks.some((block) => (
+    block.id === "state_goal"
+    && /Protected secrets/.test(block.content)
   )));
   assert.ok(repairBlocks.some((block) => block.id === "structure_obligations" && /volume mission/.test(block.content)));
   assert.ok(repairBlocks.some((block) => block.id === "repair_boundaries" && /read-only/.test(block.content)));
+  assert.ok(repairBlocks.some((block) => block.id === "repair_boundaries" && /do not disclose/.test(block.content)));
 });

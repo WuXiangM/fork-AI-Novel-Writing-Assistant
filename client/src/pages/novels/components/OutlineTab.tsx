@@ -3,10 +3,12 @@ import AiButton from "@/components/common/AiButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import BookPayoffLedgerCard from "./BookPayoffLedgerCard";
 import CollapsibleSummary from "./CollapsibleSummary";
 import WorldInjectionHint from "./WorldInjectionHint";
 import VolumePayoffOverviewCard from "./VolumePayoffOverviewCard";
 import type { OutlineTabViewProps } from "./NovelEditView.types";
+import DirectorTakeoverEntryPanel from "./DirectorTakeoverEntryPanel";
 
 function versionStatusLabel(status: "draft" | "active" | "frozen"): string {
   if (status === "active") return "已生效";
@@ -130,7 +132,13 @@ export default function OutlineTab(props: OutlineTabViewProps) {
     : null;
 
   return (
-    <Card>
+    <div className="space-y-4">
+      <DirectorTakeoverEntryPanel
+        title="从卷战略接管"
+        description="AI 会先判断卷战略和卷骨架是否已齐，再决定继续补缺失部分还是重跑当前步骤。"
+        entry={props.directorTakeoverEntry}
+      />
+      <Card>
       <CardHeader className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="space-y-1">
           <CardTitle>卷战略 / 卷骨架</CardTitle>
@@ -488,6 +496,11 @@ export default function OutlineTab(props: OutlineTabViewProps) {
           </CardContent>
         </Card>
 
+        <BookPayoffLedgerCard
+          latestStateSnapshot={latestStateSnapshot}
+          payoffLedger={payoffLedger}
+        />
+
         <div className="grid items-start gap-3 xl:grid-cols-[320px_minmax(0,1fr)]">
           <Card className="self-start xl:sticky xl:top-4">
             <CardHeader className="pb-3">
@@ -547,8 +560,6 @@ export default function OutlineTab(props: OutlineTabViewProps) {
               <>
                 <VolumePayoffOverviewCard
                   selectedVolume={selectedVolume}
-                  latestStateSnapshot={latestStateSnapshot}
-                  payoffLedger={payoffLedger}
                 />
                 <Card key={selectedVolume.id}>
                   <CardHeader className="pb-3">
@@ -642,6 +653,7 @@ export default function OutlineTab(props: OutlineTabViewProps) {
           </div>
         </div>
       </CardContent>
-    </Card>
+      </Card>
+    </div>
   );
 }

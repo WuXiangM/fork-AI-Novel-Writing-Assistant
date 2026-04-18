@@ -1,6 +1,9 @@
 import type { ApiResponse } from "@ai-novel/shared/types/api";
 import type {
+  ChapterEditorAiRevisionRequest,
+  ChapterEditorAiRevisionResponse,
   Chapter,
+  ChapterEditorWorkspaceResponse,
   ChapterEditorRewritePreviewRequest,
   ChapterEditorRewritePreviewResponse,
   ChapterStatus,
@@ -84,6 +87,41 @@ export async function previewChapterRewrite(
 ) {
   const { data } = await apiClient.post<ApiResponse<ChapterEditorRewritePreviewResponse>>(
     `/novels/${novelId}/chapters/${chapterId}/editor/rewrite-preview`,
+    payload,
+  );
+  return data;
+}
+
+export async function getChapterEditorWorkspace(novelId: string, chapterId: string) {
+  const { data } = await apiClient.get<ApiResponse<ChapterEditorWorkspaceResponse>>(
+    `/novels/${novelId}/chapters/${chapterId}/editor/workspace`,
+  );
+  return data;
+}
+
+export async function previewChapterAiRevision(
+  novelId: string,
+  chapterId: string,
+  payload: ChapterEditorAiRevisionRequest,
+) {
+  const { data } = await apiClient.post<ApiResponse<ChapterEditorAiRevisionResponse>>(
+    `/novels/${novelId}/chapters/${chapterId}/editor/ai-revision-preview`,
+    payload,
+  );
+  return data;
+}
+
+export async function generateChapterExecutionContract(
+  novelId: string,
+  chapterId: string,
+  payload: Partial<{
+    provider: import("@ai-novel/shared/types/llm").LLMProvider;
+    model: string;
+    temperature: number;
+  }> = {},
+) {
+  const { data } = await apiClient.post<ApiResponse<Chapter>>(
+    `/novels/${novelId}/chapters/${chapterId}/execution-contract`,
     payload,
   );
   return data;

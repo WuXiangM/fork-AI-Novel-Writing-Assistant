@@ -63,7 +63,7 @@ export function reconcileAutoDirectorChapterBatchState(input: {
   }
 
   const failureMessage = input.failureMessage?.trim()
-    || "前 10 章自动执行未能全部通过质量要求。";
+    || `${buildDirectorAutoExecutionScopeLabelFromState(autoExecution, range.totalChapterCount)}自动执行未能全部通过质量要求。`;
   return {
     autoExecution,
     checkpointType: "chapter_batch_ready",
@@ -116,6 +116,7 @@ export async function syncAutoDirectorChapterBatchCheckpoint(input: {
       id: true,
       order: true,
       generationState: true,
+      chapterStatus: true,
     },
   });
   const reconciliation = reconcileAutoDirectorChapterBatchState({

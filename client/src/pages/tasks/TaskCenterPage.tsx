@@ -6,12 +6,21 @@ import type { NovelWorkflowCheckpoint, NovelWorkflowResumeTarget } from "@ai-nov
 import { continueNovelWorkflow } from "@/api/novelWorkflow";
 import { archiveTask, cancelTask, getTaskDetail, listTasks, retryTask } from "@/api/tasks";
 import { queryKeys } from "@/api/queryKeys";
+import LLMSelector, { type LLMSelectorValue } from "@/components/common/LLMSelector";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import OpenInCreativeHubButton from "@/components/creativeHub/OpenInCreativeHubButton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toast";
+import { resolveWorkflowContinuationFeedback } from "@/lib/novelWorkflowContinuation";
+import { useDirectorChapterTitleRepair } from "@/hooks/useDirectorChapterTitleRepair";
+import {
+  buildTaskNoticeRoute,
+  isChapterTitleDiversitySummary,
+  parseDirectorTaskNotice,
+  resolveChapterTitleWarning,
+} from "@/lib/directorTaskNotice";
 import { canContinueFront10AutoExecution, getCandidateSelectionLink, requiresCandidateSelection } from "@/lib/novelWorkflowTaskUi";
 import { useLLMStore } from "@/store/llmStore";
 
@@ -57,7 +66,8 @@ function formatKind(kind: TaskKind): string {
   return "图片生成";
 }
 
-function formatCheckpoint(checkpoint: NovelWorkflowCheckpoint | null | undefined): string {
+function formatCheckpoint(checkpoint: NovelWorkflowCheckpoint | null | undefined, scopeLabel?: string | null): string {
+  const resolvedScopeLabel = scopeLabel?.trim() || "前 10 章";
   if (checkpoint === "candidate_selection_required") {
     return "等待确认书级方向";
   }
@@ -71,10 +81,10 @@ function formatCheckpoint(checkpoint: NovelWorkflowCheckpoint | null | undefined
     return "卷战略已就绪";
   }
   if (checkpoint === "front10_ready") {
-    return "前 10 章可开写";
+    return `${resolvedScopeLabel}可开写`;
   }
   if (checkpoint === "chapter_batch_ready") {
-    return "章节批量资源已就绪";
+    return `${resolvedScopeLabel}自动执行已暂停`;
   }
   if (checkpoint === "replan_required") {
     return "需要重规划";
@@ -169,6 +179,11 @@ export default function TaskCenterPage() {
   const [status, setStatus] = useState<TaskStatus | "">("");
   const [keyword, setKeyword] = useState("");
   const [onlyAnomaly, setOnlyAnomaly] = useState(false);
+  const [retryOverride, setRetryOverride] = useState<LLMSelectorValue>({
+    provider: llm.provider,
+    model: llm.model,
+    temperature: llm.temperature,
+  });
 
   const selectedKind = (searchParams.get("kind") as TaskKind | null) ?? null;
   const selectedId = searchParams.get("id");
@@ -301,15 +316,22 @@ export default function TaskCenterPage() {
   });
 
   const continueWorkflowMutation = useMutation({
-    mutationFn: (payload: { taskId: string; mode?: "auto_execute_front10" }) => continueNovelWorkflow(
+    mutationFn: (payload: { taskId: string; mode?: "auto_execute_range" }) => continueNovelWorkflow(
       payload.taskId,
       payload.mode ? { continuationMode: payload.mode } : undefined,
     ),
     onSuccess: async (response, variables) => {
       await invalidateTaskQueries();
       const task = response.data;
-      if (variables.mode === "auto_execute_front10") {
-        toast.success("已继续自动执行前 10 章。");
+      const feedback = resolveWorkflowContinuationFeedback(task, {
+        mode: variables.mode,
+      });
+      if (feedback.tone === "error") {
+        toast.error(feedback.message);
+        return;
+      }
+      if (variables.mode === "auto_execute_range") {
+        toast.success(feedback.message);
         return;
       }
       if (task?.kind && task.id) {
@@ -322,7 +344,7 @@ export default function TaskCenterPage() {
         navigate(task.sourceRoute);
         return;
       }
-      toast.success("已恢复小说主流程。");
+      toast.success(feedback.message);
     },
   });
 
@@ -364,6 +386,35 @@ export default function TaskCenterPage() {
     && selectedTask.kind === "novel_workflow"
     && requiresCandidateSelection(selectedTask),
   );
+  const selectedTaskNotice = useMemo(
+    () => parseDirectorTaskNotice(selectedTask?.meta),
+    [selectedTask?.meta],
+  );
+  const selectedTaskNoticeRoute = useMemo(
+    () => (selectedTask ? buildTaskNoticeRoute(selectedTask, selectedTaskNotice) : null),
+    [selectedTask, selectedTaskNotice],
+  );
+  const selectedTaskChapterTitleWarning = useMemo(
+    () => (isAutoDirectorTask ? resolveChapterTitleWarning(selectedTask ?? null) : null),
+    [isAutoDirectorTask, selectedTask],
+  );
+  const chapterTitleRepairMutation = useDirectorChapterTitleRepair();
+  const selectedTaskFailureRepairRoute = selectedTaskChapterTitleWarning?.route ?? null;
+  const selectedTaskHasChapterTitleFailure = Boolean(
+    selectedTask
+    && isChapterTitleDiversitySummary(
+      selectedTask.failureSummary ?? selectedTask.lastError ?? null,
+    ),
+  );
+  const canRetryWithSelectedModel = Boolean(retryOverride.provider && retryOverride.model.trim());
+
+  useEffect(() => {
+    setRetryOverride({
+      provider: llm.provider,
+      model: llm.model,
+      temperature: llm.temperature,
+    });
+  }, [llm.model, llm.provider, llm.temperature, selectedTask?.id]);
 
   return (
     <div className="space-y-4">
@@ -490,7 +541,7 @@ export default function TaskCenterPage() {
                 ) : null}
                 {task.kind === "novel_workflow" ? (
                   <div className="mt-1 text-xs text-muted-foreground">
-                    检查点：{formatCheckpoint(task.checkpointType)} | 建议继续：{task.resumeAction ?? task.nextActionLabel ?? "继续主流程"}
+                    检查点：{formatCheckpoint(task.checkpointType, task.executionScopeLabel)} | 建议继续：{task.resumeAction ?? task.nextActionLabel ?? "继续主流程"}
                   </div>
                 ) : null}
                 {task.blockingReason ? (
@@ -535,7 +586,7 @@ export default function TaskCenterPage() {
                   <div>当前项：{selectedTask.currentItemLabel ?? "暂无"}</div>
                   {selectedTask.kind === "novel_workflow" ? (
                     <>
-                      <div>最近检查点：{formatCheckpoint(selectedTask.checkpointType)}</div>
+                      <div>最近检查点：{formatCheckpoint(selectedTask.checkpointType, selectedTask.executionScopeLabel)}</div>
                       <div>恢复目标页：{formatResumeTarget(selectedTask.resumeTarget)}</div>
                       <div>建议继续：{selectedTask.resumeAction ?? selectedTask.nextActionLabel ?? "继续小说主流程"}</div>
                       <div>最近健康阶段：{selectedTask.lastHealthyStage ?? "暂无"}</div>
@@ -567,24 +618,64 @@ export default function TaskCenterPage() {
                 {selectedTask.noticeCode || selectedTask.noticeSummary ? (
                   <div className="rounded-md border border-amber-300/50 bg-amber-50/70 p-2 text-amber-900">
                     <div className="font-medium">
-                      {selectedTask.noticeCode ?? "结果提醒"}
+                      {selectedTaskChapterTitleWarning ? "当前提醒" : (selectedTask.noticeCode ?? "结果提醒")}
                     </div>
                     {selectedTask.noticeSummary ? (
                       <div className="mt-1 text-sm">{selectedTask.noticeSummary}</div>
+                    ) : null}
+                    {selectedTaskChapterTitleWarning || selectedTaskNoticeRoute ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            if (selectedTaskChapterTitleWarning) {
+                              chapterTitleRepairMutation.startRepair(selectedTask ?? null);
+                              return;
+                            }
+                            if (selectedTaskNoticeRoute) {
+                              navigate(selectedTaskNoticeRoute);
+                            }
+                          }}
+                          disabled={chapterTitleRepairMutation.isPending}
+                        >
+                          {selectedTaskChapterTitleWarning?.label ?? selectedTaskNotice?.action?.label ?? "打开当前卷拆章"}
+                        </Button>
+                      </div>
                     ) : null}
                   </div>
                 ) : null}
                 {selectedTask.failureCode || selectedTask.failureSummary ? (
                   <div className="rounded-md border border-amber-300/50 bg-amber-50/70 p-2 text-amber-900">
                     <div className="font-medium">
-                      {selectedTask.failureCode ?? "任务异常"}
+                      {selectedTaskHasChapterTitleFailure ? "当前提醒" : (selectedTask.failureCode ?? "任务异常")}
                     </div>
                     {selectedTask.failureSummary ? (
                       <div className="mt-1 text-sm">{selectedTask.failureSummary}</div>
                     ) : null}
+                    {selectedTaskChapterTitleWarning || selectedTaskFailureRepairRoute ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            if (selectedTaskChapterTitleWarning) {
+                              chapterTitleRepairMutation.startRepair(selectedTask ?? null);
+                              return;
+                            }
+                            if (selectedTaskFailureRepairRoute) {
+                              navigate(selectedTaskFailureRepairRoute);
+                            }
+                          }}
+                          disabled={chapterTitleRepairMutation.isPending}
+                        >
+                          {selectedTaskChapterTitleWarning?.label ?? "快速修复章节标题"}
+                        </Button>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
-                {selectedTask.lastError ? (
+                {selectedTask.lastError && !selectedTaskHasChapterTitleFailure ? (
                   <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-destructive">
                     {selectedTask.lastError}
                   </div>
@@ -592,6 +683,40 @@ export default function TaskCenterPage() {
                 {selectedTask.kind === "novel_workflow" && selectedTask.checkpointSummary ? (
                   <div className="rounded-md border bg-muted/20 p-2 text-muted-foreground">
                     {selectedTask.checkpointSummary}
+                  </div>
+                ) : null}
+                {(selectedTask.status === "failed" || selectedTask.status === "cancelled") && isAutoDirectorTask ? (
+                  <div className="rounded-md border bg-muted/20 p-3">
+                    <div className="text-xs text-muted-foreground">使用其他模型重试</div>
+                    <div className="mt-2 flex flex-col gap-2">
+                      <LLMSelector
+                        value={retryOverride}
+                        onChange={setRetryOverride}
+                        compact
+                        showBadge={false}
+                        showHelperText={false}
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() =>
+                            retryMutation.mutate({
+                              kind: selectedTask.kind,
+                              id: selectedTask.id,
+                              llmOverride: {
+                                provider: retryOverride.provider,
+                                model: retryOverride.model,
+                                temperature: retryOverride.temperature,
+                              },
+                              resume: true,
+                            })
+                          }
+                          disabled={retryMutation.isPending || !canRetryWithSelectedModel}
+                        >
+                          使用所选模型重试
+                        </Button>
+                      </div>
+                    </div>
                   </div>
                 ) : null}
                 <div className="flex flex-wrap gap-2">
@@ -609,11 +734,11 @@ export default function TaskCenterPage() {
                       onClick={() =>
                         continueWorkflowMutation.mutate({
                           taskId: selectedTask.id,
-                          mode: "auto_execute_front10",
+                          mode: "auto_execute_range",
                         })}
                       disabled={continueWorkflowMutation.isPending}
                     >
-                      {selectedTask.resumeAction ?? "继续自动执行前 10 章"}
+                      {selectedTask.resumeAction ?? `继续自动执行${selectedTask.executionScopeLabel ?? "当前章节范围"}`}
                     </Button>
                   ) : null}
                   {selectedTask.kind === "novel_workflow"
@@ -633,26 +758,6 @@ export default function TaskCenterPage() {
                   ) : null}
                   {(selectedTask.status === "failed" || selectedTask.status === "cancelled") ? (
                     <>
-                      {isAutoDirectorTask ? (
-                        <Button
-                          size="sm"
-                          onClick={() =>
-                            retryMutation.mutate({
-                              kind: selectedTask.kind,
-                              id: selectedTask.id,
-                              llmOverride: {
-                                provider: llm.provider,
-                                model: llm.model,
-                                temperature: llm.temperature,
-                              },
-                              resume: true,
-                            })
-                          }
-                          disabled={retryMutation.isPending}
-                        >
-                          用当前模型重试
-                        </Button>
-                      ) : null}
                       <Button
                         size="sm"
                         variant={isAutoDirectorTask ? "outline" : "default"}
@@ -664,7 +769,7 @@ export default function TaskCenterPage() {
                         }
                         disabled={retryMutation.isPending}
                       >
-                        重试
+                        {isAutoDirectorTask ? "按任务原模型重试" : "重试"}
                       </Button>
                     </>
                   ) : null}

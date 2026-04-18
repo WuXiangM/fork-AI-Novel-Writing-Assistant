@@ -84,6 +84,7 @@ async function syncArcCompatibility(
         openPayoffs: volume.openPayoffs,
         chapters: volume.chapters.map((chapter) => ({
           chapterOrder: chapter.chapterOrder,
+          beatKey: chapter.beatKey ?? null,
           title: chapter.title,
           summary: chapter.summary,
         })),
@@ -146,6 +147,7 @@ export async function persistActiveVolumeWorkspace(
             targetWordCount: chapter.targetWordCount ?? null,
             mustAvoid: chapter.mustAvoid ?? null,
             taskSheet: chapter.taskSheet ?? null,
+            sceneCards: chapter.sceneCards ?? null,
             payoffRefsJson: JSON.stringify(chapter.payoffRefs),
           })),
         },

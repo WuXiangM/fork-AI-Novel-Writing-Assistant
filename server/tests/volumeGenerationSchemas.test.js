@@ -1,7 +1,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
+  createChapterBoundarySchema,
+  createChapterTaskSheetSchema,
   createVolumeBeatSheetSchema,
+  createVolumeChapterBeatBlockSchema,
   createVolumeRebalanceSchema,
   createVolumeStrategySchema,
 } = require("../dist/services/novel/volume/volumeGenerationSchemas.js");
@@ -11,6 +14,9 @@ const {
 const {
   volumeBeatSheetPrompt,
 } = require("../dist/prompting/prompts/novel/volume/beatSheet.prompts.js");
+const {
+  buildVolumeBeatSheetContextBlocks,
+} = require("../dist/prompting/prompts/novel/volume/contextBlocks.js");
 const {
   volumeRebalancePrompt,
 } = require("../dist/prompting/prompts/novel/volume/rebalance.prompts.js");
@@ -228,6 +234,108 @@ test("volume beat sheet schema normalizes alias fields and wrapped payloads", ()
   assert.equal(parsed.beats[2].label, "中段转向");
 });
 
+test("volume chapter beat block schema normalizes beat aliases and enforces beat ownership", () => {
+  const schema = createVolumeChapterBeatBlockSchema({
+    exactChapterCount: 2,
+    expectedBeatKey: "open_hook",
+    expectedBeatLabel: "开卷抓手",
+  });
+  const parsed = schema.parse({
+    beat: "open_hook",
+    label: "开卷抓手",
+    count: 2,
+    items: [
+      {
+        chapterTitle: "第一束异常光",
+        description: "主角第一次看见危险信号，把卷内压迫落到眼前。",
+        beat: "open_hook",
+      },
+      {
+        name: "封锁线内侧",
+        content: "主角被迫进入更危险的区域，让本卷生存承诺正式成立。",
+        beat_key: "open_hook",
+      },
+    ],
+  });
+
+  assert.equal(parsed.beatKey, "open_hook");
+  assert.equal(parsed.beatLabel, "开卷抓手");
+  assert.equal(parsed.chapterCount, 2);
+  assert.equal(parsed.chapters[1].beatKey, "open_hook");
+});
+
+test("chapter boundary schema normalizes structured boundary aliases", () => {
+  const schema = createChapterBoundarySchema();
+  const parsed = schema.parse({
+    独占事件: "第一次正式提取碎银。",
+    本章结束状态: "程秩已经意识到钱能拿，但暂时不敢花。",
+    下章入口状态: "程秩带着藏银压力进入下一章继续观察人和事。",
+    冲突等级: "82",
+    reveal_level: 41,
+    字数: "3200",
+    避免事项: "不要直接把后续请缨节点提前写掉。",
+    关联兑现: "第一笔资源,财富风险认知",
+  });
+
+  assert.equal(parsed.exclusiveEvent, "第一次正式提取碎银。");
+  assert.equal(parsed.endingState, "程秩已经意识到钱能拿，但暂时不敢花。");
+  assert.equal(parsed.nextChapterEntryState, "程秩带着藏银压力进入下一章继续观察人和事。");
+  assert.equal(parsed.conflictLevel, 82);
+  assert.equal(parsed.revealLevel, 41);
+  assert.equal(parsed.targetWordCount, 3200);
+  assert.equal(parsed.mustAvoid, "不要直接把后续请缨节点提前写掉。");
+  assert.deepEqual(parsed.payoffRefs, ["第一笔资源", "财富风险认知"]);
+});
+
+test("volume workspace document preserves chapter beat keys", () => {
+  const document = buildVolumeWorkspaceDocument({
+    novelId: "novel-1",
+    volumes: [
+      {
+        ...createVolume(1),
+        chapters: [
+          {
+            id: "chapter-1",
+            volumeId: "volume-1",
+            chapterOrder: 1,
+            beatKey: "open_hook",
+            title: "第一束异常光",
+            summary: "主角第一次看见危险信号。",
+            purpose: null,
+            conflictLevel: null,
+            revealLevel: null,
+            targetWordCount: null,
+            mustAvoid: null,
+            taskSheet: null,
+            sceneCards: null,
+            payoffRefs: [],
+            createdAt: new Date(0).toISOString(),
+            updatedAt: new Date(0).toISOString(),
+          },
+        ],
+      },
+    ],
+    beatSheets: [
+      {
+        volumeId: "volume-1",
+        volumeSortOrder: 1,
+        status: "generated",
+        beats: [
+          {
+            key: "open_hook",
+            label: "开卷抓手",
+            summary: "先把局势危险钉死。",
+            chapterSpanHint: "1章",
+            mustDeliver: ["压迫感"],
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(document.volumes[0].chapters[0].beatKey, "open_hook");
+});
+
 test("volume beat sheet prompt render includes explicit JSON field contract", () => {
   const messages = volumeBeatSheetPrompt.render({
     novel: {},
@@ -252,6 +360,7 @@ test("volume beat sheet prompt render includes explicit JSON field contract", ()
     storyMacroPlan: null,
     strategyPlan: null,
     targetVolume: createVolume(1),
+    targetChapterCount: 18,
   }, {
     blocks: [],
     selectedBlockIds: [],
@@ -266,6 +375,38 @@ test("volume beat sheet prompt render includes explicit JSON field contract", ()
   assert.match(systemPrompt, /"chapterSpanHint"/);
   assert.match(systemPrompt, /"mustDeliver"/);
   assert.match(systemPrompt, /5-8/);
+  assert.match(systemPrompt, /Current volume target chapter count: 18/);
+  assert.match(systemPrompt, /volume-local numbering only/);
+});
+
+test("volume beat sheet context blocks include the current volume chapter target", () => {
+  const blocks = buildVolumeBeatSheetContextBlocks({
+    novel: { characters: [] },
+    workspace: {
+      volumes: [],
+      strategyPlan: null,
+      critiqueReport: null,
+      beatSheets: [],
+      rebalanceDecisions: [],
+      readiness: {
+        canGenerateStrategy: true,
+        canGenerateSkeleton: false,
+        canGenerateBeatSheet: false,
+        canGenerateChapterList: false,
+        blockingReasons: [],
+      },
+      derivedOutline: "",
+      derivedStructuredOutline: "",
+      source: "empty",
+      activeVersionId: null,
+    },
+    storyMacroPlan: null,
+    strategyPlan: null,
+    targetVolume: createVolume(1),
+    targetChapterCount: 18,
+  });
+
+  assert.ok(blocks.some((block) => block.group === "target_chapter_count" && block.content.includes("Target chapter count: 18")));
 });
 
 test("volume rebalance schema normalizes wrapped arrays, numeric refs, and direction aliases", () => {
@@ -363,4 +504,53 @@ test("volume rebalance prompt render explains order-based id contract and enum d
   assert.match(systemPrompt, /卷序号字符串/);
   assert.match(systemPrompt, /pull_forward、push_back、tighten_current、expand_adjacent、hold/);
   assert.match(systemPrompt, /"decisions"/);
+});
+
+test("chapter task sheet schema parses taskSheet plus aliased scene cards", () => {
+  const schema = createChapterTaskSheetSchema();
+  const parsed = schema.parse({
+    task_sheet: "本章先让主角接住情报，再完成第一次明确反压，最后留下更大威胁。",
+    scenes: [
+      {
+        sceneKey: "intel_handover",
+        sceneTitle: "接住情报",
+        objective: "让女二把关键情报送到主角手里。",
+        mustAdvanceItems: "情报到手,反压起点成立",
+        mustPreserveItems: ["女二仍有保留", "压迫感不能消失"],
+        startState: "主角被压制，情报链还断着。",
+        endState: "主角确认反压切入口已经成立。",
+        forbidden: "不要提前揭露幕后黑手",
+        wordCount: "900",
+      },
+      {
+        id: "first_counterattack",
+        label: "第一次反压",
+        goal: "把情报转成看得见的反压收益。",
+        deliverables: ["明确收益", "敌方被迫应对"],
+        preserveItems: "资源差距仍在,主角不算完全翻盘",
+        openingState: "主角刚拿到情报，准备落子。",
+        closingState: "主角拿到阶段性主动权，但代价同步抬高。",
+        mustAvoid: ["不要洗白敌方", "不要直接大决战"],
+        budget: 1200,
+      },
+      {
+        key: "end_hook",
+        title: "尾段钩子",
+        purpose: "把新的更大威胁钉到章末。",
+        mustAdvance: ["新的威胁出现"],
+        mustPreserve: ["本章反压收益仍然有效"],
+        entryState: "主角刚完成第一次反压。",
+        exitState: "读者明确知道下一章压力会更高。",
+        forbiddenExpansion: ["不要展开下章战斗"],
+        targetWordCount: 800,
+      },
+    ],
+  });
+
+  assert.equal(parsed.taskSheet.includes("第一次明确反压"), true);
+  assert.equal(parsed.sceneCards.length, 3);
+  assert.equal(parsed.sceneCards[0].title, "接住情报");
+  assert.deepEqual(parsed.sceneCards[1].mustAdvance, ["明确收益", "敌方被迫应对"]);
+  assert.deepEqual(parsed.sceneCards[1].forbiddenExpansion, ["不要洗白敌方", "不要直接大决战"]);
+  assert.equal(parsed.sceneCards[2].targetWordCount, 800);
 });
